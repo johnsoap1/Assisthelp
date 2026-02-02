@@ -24,10 +24,19 @@
 
 ## 🚀 Features
 
-### �️ Storage
+### 🗄️ Storage
 - Default: **SQLite** (`wbb.sqlite`) via SQLAlchemy with Mongo-like API (find_one, find, insert_one, update_one, delete_one)
 - Optional: set `DB_URL` to point to another SQL backend (e.g., PostgreSQL) without changing modules
 - Backup/restore: use `/backup` and `/restore` commands (zips the SQLite file)
+- Tables: users, chats, bans, settings, feds, sudoers, music_cache, triggers, trigger_stats, translate_history, antiservice_settings, admin_logs, dedupe_settings, media_hashes, user_media_stats, plus generic Document for legacy collections
+
+### 📊 Media Deduplication & Tracking
+- Automatic duplicate media detection and removal using file hash matching
+- Per-user photo/video statistics and leaderboards with rankings
+- Moderation tools: kick inactive users or low contributors
+- Commands: `/dedupe on|off|status`, `/mycount`, `/leaderboard`, `/count <user>`, `/mediastats`, `/kick50`, `/inactivekick <time>`, `/scaninactive <time>`
+- Time formats: `7d`, `1M`, `24h`, `1w`
+- Requires bot admin with delete messages and ban users permissions for moderation commands
 
 ### �🔄 Enhanced Pipes Module
 Advanced message forwarding with multiple modes and history support.

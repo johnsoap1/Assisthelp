@@ -142,6 +142,38 @@ class AdminLog(Base):
     data = Column(JSON, default={})
 
 
+class DedupeSettings(Base):
+    __tablename__ = "dedupe_settings"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    chat_id = Column(Integer, unique=True, nullable=False, index=True)
+    enabled = Column(Boolean, default=False)
+    updated_at = Column(Integer)  # Unix timestamp
+    data = Column(JSON, default={})
+
+
+class MediaHash(Base):
+    __tablename__ = "media_hashes"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    chat_id = Column(Integer, nullable=False, index=True)
+    file_hash = Column(String, nullable=False, index=True)
+    user_id = Column(Integer, nullable=False)
+    message_id = Column(Integer)
+    timestamp = Column(Integer)  # Unix timestamp
+    data = Column(JSON, default={})
+
+
+class UserMediaStats(Base):
+    __tablename__ = "user_media_stats"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    chat_id = Column(Integer, nullable=False, index=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    photos = Column(Integer, default=0)
+    videos = Column(Integer, default=0)
+    total = Column(Integer, default=0, index=True)  # Index for leaderboard queries
+    last_media = Column(Integer)  # Unix timestamp
+    data = Column(JSON, default={})
+
+
 class Document(Base):
     """Generic collection-backed document storage."""
     __tablename__ = "documents"
@@ -476,6 +508,10 @@ class DB:
         self.translate_history = Collection("translate_history", TranslateHistory)
         self.antiservice_settings = Collection("antiservice_settings", AntiServiceSettings)
         self.admin_logs = Collection("admin_logs", AdminLog)
+        # NEW: Media deduplication collections
+        self.dedupe_settings = Collection("dedupe_settings", DedupeSettings)
+        self.media_hashes = Collection("media_hashes", MediaHash)
+        self.user_media_stats = Collection("user_media_stats", UserMediaStats)
         self._generic = {}
 
     def __getattr__(self, item: str):
