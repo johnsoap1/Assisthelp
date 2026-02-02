@@ -1,0 +1,97 @@
+"""
+
+"""
+import random
+from datetime import datetime, timedelta
+
+import pytz
+from pyrogram import enums, filters
+
+from wbb import app
+from wbb.core.decorators.errors import capture_err
+from wbb.utils.dbfunctions import get_couple, save_couple
+
+__MODULE__ = "Shippering"
+__HELP__ = "/detect_gay - Choose Couple of the Day 💖"
+
+# ------------------ Date Utilities ------------------ #
+IST = pytz.timezone("Asia/Kolkata")
+
+def today_date():
+    return datetime.now(IST).strftime("%d/%m/%Y")
+
+def tomorrow_date():
+    return (datetime.now(IST) + timedelta(days=1)).strftime("%d/%m/%Y")
+
+# ------------------ Command Handler ------------------ #
+@app.on_message(filters.command("detect_gay"))
+@capture_err
+async def couple(_, message):
+    if message.chat.type == enums.ChatType.PRIVATE:
+        return await message.reply_text("This command only works in groups.")
+
+    m = await message.reply("🔍 Detecting the couple of the day...")
+
+    try:
+        chat_id = message.chat.id
+        existing_couple = await get_couple(chat_id, today_date())
+
+        if existing_couple:
+            # Couple already chosen
+            c1_id = int(existing_couple["c1_id"])
+            c2_id = int(existing_couple["c2_id"])
+            c1_user = await app.get_users(c1_id)
+            c2_user = await app.get_users(c2_id)
+            c1_name = c1_user.first_name
+            c2_name = c2_user.first_name
+
+            message_text = (
+                f"💞 **Couple of the Day:**\n"
+                f"[{c1_name}](tg://openmessage?user_id={c1_id}) + "
+                f"[{c2_name}](tg://openmessage?user_id={c2_id}) = ❤️\n\n"
+                f"__New couple can be chosen at 12AM {tomorrow_date()}__"
+            )
+            return await m.edit(message_text)
+
+        # No couple yet, choose new couple
+        try:
+            members = [
+                member async for member in app.get_chat_members(chat_id)
+                if not member.user.is_bot and not member.user.is_deleted
+            ]
+        except Exception as e:
+            print(f"[ERROR] Failed to get chat members for couple detection in chat {chat_id}: {e}")
+            return await m.edit("❌ Could not access chat members for couple detection.")
+
+        if len(members) < 2:
+            return await m.edit("❌ Not enough eligible users to choose a couple.")
+
+        c1_user, c2_user = random.sample(members, 2)
+        c1_mention = c1_user.user.mention
+        c2_mention = c2_user.user.mention
+
+        fun_messages = [
+            "💖 They are the OTP!",
+            "🔥 Ship successful!",
+            "❤️ Love is in the air!",
+            "💞 Match made in heaven!"
+        ]
+        fun_msg = random.choice(fun_messages)
+
+        couple_text = (
+            f"💞 **Couple of the Day:**\n"
+            f"{c1_mention} + {c2_mention} = ❤️\n\n"
+            f"{fun_msg}\n"
+            f"__New couple can be chosen at 12AM {tomorrow_date()}__"
+        )
+        await m.edit(couple_text)
+
+        # Save selected couple
+        await save_couple(chat_id, today_date(), {
+            "c1_id": c1_user.user.id,
+            "c2_id": c2_user.user.id
+        })
+
+    except Exception as e:
+        print(f"[ERROR] /detect_gay: {e}")
+        await m.edit("❌ Something went wrong while detecting the couple.")
