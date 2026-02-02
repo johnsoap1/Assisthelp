@@ -1,4 +1,4 @@
-""" WRITTEN BY @pokurt, https://github.com/pokurt"""
+""" """
 
 import traceback
 from functools import wraps

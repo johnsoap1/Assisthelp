@@ -1,5 +1,5 @@
 """
-Enhanced Triggers Module v2 for William Butcher Bot
+Enhanced Triggers Module v2 
 
 Features:
 - Global + Local triggers

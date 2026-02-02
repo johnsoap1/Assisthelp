@@ -1,5 +1,5 @@
 """
-Admin Module for William Butcher Bot / AssistBot
+Admin Module for AssistBot
 Complete admin functionality with command management
 """
 
