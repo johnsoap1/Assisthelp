@@ -106,17 +106,14 @@ async def remove_trigger(chat_id: int, trigger: str, is_global=False) -> bool:
 
 async def get_chat_triggers(chat_id: int, include_global=True) -> List[Dict]:
     if triggers_db is not None:
-        query = [{"chat_id": chat_id}]
         if include_global:
-            query.append({"chat_id": 0})
-        return await triggers_db.find({"$or": query}).to_list(None)
+            cursor = await triggers_db.find({"$or": [{"chat_id": chat_id}, {"chat_id": 0}]})
+        else:
+            cursor = await triggers_db.find({"chat_id": chat_id})
+        return await cursor.to_list(length=None)
     else:
-        res = []
-        for v in triggers_storage.values():
-            cid = v.get("chat_id", 0)
-            if cid == chat_id or (include_global and cid == 0):
-                res.append(v)
-        return res
+        # Fallback to in-memory
+        return [v for v in triggers_storage.values() if v.get("chat_id") == chat_id or (include_global and v.get("chat_id") == 0)]
 
 
 async def record_trigger_usage(chat_id: int, trigger: str):

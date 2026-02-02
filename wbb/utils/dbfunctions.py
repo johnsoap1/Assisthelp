@@ -208,6 +208,50 @@ async def deleteall_filters(chat_id: int):
     return await filtersdb.delete_one({"chat_id": chat_id})
 
 
+# ==================== Antiservice & Admin Logs (SQLite) ====================
+
+
+async def is_antiservice_on(chat_id: int) -> bool:
+    doc = await db.antiservice_settings.find_one({"chat_id": chat_id})
+    return doc.get("enabled", False) if doc else False
+
+
+async def antiservice_on(chat_id: int):
+    await db.antiservice_settings.update_one({"chat_id": chat_id}, {"$set": {"enabled": True}}, upsert=True)
+
+
+async def antiservice_off(chat_id: int):
+    await db.antiservice_settings.update_one({"chat_id": chat_id}, {"$set": {"enabled": False}}, upsert=True)
+
+
+async def get_antiservice_settings(chat_id: int) -> dict:
+    doc = await db.antiservice_settings.find_one({"chat_id": chat_id})
+    if not doc:
+        return {
+            "delete_joins": True,
+            "delete_leaves": True,
+            "delete_pins": True,
+            "delete_changes": True,
+            "delete_commands": True,
+            "command_delay": 2,
+            "admin_bypass": False,
+        }
+    return doc.get("data", {}) or {}
+
+
+async def update_antiservice_settings(chat_id: int, settings: dict):
+    await db.antiservice_settings.update_one({"chat_id": chat_id}, {"$set": {"data": settings}}, upsert=True)
+
+
+async def is_admin_log_enabled(chat_id: int) -> bool:
+    doc = await db.admin_logs.find_one({"chat_id": chat_id})
+    return doc.get("enabled", False) if doc else False
+
+
+async def toggle_admin_log(chat_id: int, enabled: bool):
+    await db.admin_logs.update_one({"chat_id": chat_id}, {"$set": {"enabled": enabled}}, upsert=True)
+
+
 # ==================== Rules Functions ====================
 
 async def get_rules(chat_id: int) -> str:

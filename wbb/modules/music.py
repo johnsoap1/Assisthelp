@@ -208,65 +208,74 @@ def debug_file_info(file_path: str, prefix: str = ""):
 # ==================== CACHE MANAGEMENT ====================
 
 async def get_cached_song(query: str, exact_only: bool = True) -> Optional[Dict]:
-    """Get cached song by query with access tracking."""
+    """Get cached song by query with access tracking (SQLite)."""
     query_norm = normalize_query(query)
-    
-    # Try exact match first
+
     data = await cache_col.find_one({"query": query_norm})
     if data:
-        # Update access stats
         await cache_col.update_one(
             {"query": query_norm},
             {
-                "$set": {"last_accessed": datetime.datetime.utcnow()},
-                "$inc": {"access_count": 1}
-            }
+                "$set": {"last_accessed": int(time.time())},
+                "$inc": {"access_count": 1},
+            },
         )
-        print(f"[CACHE] Hit: '{query_norm}' (accessed {data.get('access_count', 0) + 1} times)")
         return data
-    
-    # Fuzzy matching if allowed
-    if not exact_only:
-        all_queries = [d["query"] async for d in cache_col.find({}, {"query": 1})]
-        matches = get_close_matches(query_norm, all_queries, n=1, cutoff=0.85)
-        if matches:
-            data = await cache_col.find_one({"query": matches[0]})
-            if data:
-                await cache_col.update_one(
-                    {"query": matches[0]},
-                    {
-                        "$set": {"last_accessed": datetime.datetime.utcnow()},
-                        "$inc": {"access_count": 1}
-                    }
-                )
-                print(f"[CACHE] Fuzzy hit: '{query_norm}' -> '{matches[0]}'")
-                return data
-    
-    print(f"[CACHE] Miss: '{query_norm}'")
+
+    if exact_only:
+        return None
+
+    # Fuzzy match via Python difflib over in-memory results
+    cursor = await cache_col.find({})
+    all_data = await cursor.to_list(None)
+    from difflib import get_close_matches
+
+    all_queries = [d.get("query", "") for d in all_data]
+    matches = get_close_matches(query_norm, all_queries, n=1, cutoff=0.85)
+    if matches:
+        data = await cache_col.find_one({"query": matches[0]})
+        if data:
+            await cache_col.update_one(
+                {"query": matches[0]},
+                {
+                    "$set": {"last_accessed": int(time.time())},
+                    "$inc": {"access_count": 1},
+                },
+            )
+            return data
+
     return None
 
-async def save_cached_song(query: str, title: str, performer: str, 
-                           duration: int, file_id: str, thumb_file_id: Optional[str], 
-                           storage_msg_id: int):
-    """Save song to cache with file_id for instant retrieval."""
+async def save_cached_song(
+    query: str,
+    title: str,
+    performer: str,
+    duration: int,
+    file_id: str,
+    thumb_file_id: Optional[str],
+    storage_msg_id: int,
+):
+    """Save song to cache with file_id for instant retrieval (SQLite)."""
     normalized_query = normalize_query(query)
-    
+    now = int(time.time())
+
     await cache_col.update_one(
         {"query": normalized_query},
-        {"$set": {
-            "query": normalized_query,  # Store normalized for exact matching
-            "original_query": query,  # Store original for display
-            "title": title,
-            "performer": performer,
-            "duration": duration,
-            "file_id": file_id,  # Telegram file_id for instant sending
-            "thumb_file_id": thumb_file_id,
-            "storage_msg_id": storage_msg_id,
-            "created_at": datetime.datetime.utcnow(),
-            "last_accessed": datetime.datetime.utcnow(),
-            "access_count": 1
-        }},
-        upsert=True
+        {
+            "$set": {
+                "query": normalized_query,
+                "title": title,
+                "performer": performer,
+                "duration": duration,
+                "file_id": file_id,
+                "thumb_file_id": thumb_file_id,
+                "storage_msg_id": storage_msg_id,
+                "created_at": now,
+                "last_accessed": now,
+                "access_count": 1,
+            }
+        },
+        upsert=True,
     )
     print(f"[CACHE] Saved: '{normalized_query}' -> file_id: {file_id[:20]}...")
 
