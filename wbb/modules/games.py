@@ -1,17 +1,14 @@
 import asyncio
 import random
 from datetime import datetime, timedelta
-
-import asyncio
-import random
-import time
-from datetime import datetime, timedelta
+from pytz import timezone
 
 from pyrogram import filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram.errors import MessageNotModified
 
 from wbb import SUDOERS_SET, app, BOT_ID
+from wbb.core.storage import db
 
 # Custom filter to ignore bot's own messages
 def is_not_bot(_, __, message: Message) -> bool:
@@ -29,17 +26,17 @@ Key Fixes:
 - Improved filter handling for both groups and private chats
 """
 
-__MODULE__ = "Games"
+__MODULE__ = "Games & Shipper "
 __HELP__ = """
-🎮 **Telegram Games & Dice**
+ **Telegram Games & Dice**
 
 **Dice Commands:**
-- `/dice` - Roll a dice 🎲
-- `/dart` - Throw a dart 🎯
-- `/basketball` - Shoot a basketball 🏀
-- `/football` - Kick a football ⚽
-- `/bowling` - Bowl a ball 🎳
-- `/slot` - Spin slot machine 🎰
+- `/dice` - Roll a dice 
+- `/dart` - Throw a dart 
+- `/basketball` - Shoot a basketball 
+- `/football` - Kick a football 
+- `/bowling` - Bowl a ball 
+- `/slot` - Spin slot machine 
 
 **Interactive Games:**
 - `/rps` - Rock Paper Scissors game
@@ -47,6 +44,14 @@ __HELP__ = """
 - `/8ball <question>` - Magic 8-ball
 - `/lucky` - Test your luck (1-100)
 - `/spin` - Spin the wheel of fortune
+
+**Shipper Commands:**
+- `/detect_gay` - Ship two random users
+- `/ship` - Ship two random users
+- `/couple` - Ship two random users
+- `/love` - Ship two random users
+- `/gamestats` - Show your game statistics
+- `/leaderboard` - Show top players
 
 **Multiplayer:**
 - `/challenge @user <game>` - Challenge someone (reply to their message)

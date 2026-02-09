@@ -38,6 +38,15 @@
 - Time formats: `7d`, `1M`, `24h`, `1w`
 - Requires bot admin with delete messages and ban users permissions for moderation commands
 
+### 🔄 Advanced Media Redirection
+- Live media forwarding between groups with customizable delays (1s to 24h)
+- Historical message cloning with progress tracking
+- Pause/resume active redirections and clones
+- Anti-flood protection with automatic retry logic
+- Detailed statistics and performance monitoring
+- Commands: `/redirection <source> <dest>`, `/clone <source> <dest>`, `/stop_redirection <source>`, `/redirections`, `/redirection_stats <source>`, `/pause_redirection <source>`, `/resume_redirection <source>`
+- Only for authorized users (SUDO), respects Telegram API limits
+
 ### �🔄 Enhanced Pipes Module
 Advanced message forwarding with multiple modes and history support.
 

@@ -66,7 +66,13 @@ __HELP__ = """/ban - Ban A User
 /invite - Send Group/SuperGroup Invite Link.
 /banall [time] - Ban users who joined in last X time (1h, 24h, 7d)
 /inactive - Show activity report for inactive users
-/adminlog - Toggle admin action logging"""
+/adminlog - Toggle admin action logging
+
+**Blocklist System:**
+/addblocklist - Add multiple words/phrases to blocklist
+/rmblocklist - Remove items from blocklist
+/blocklist - Show current blocklist
+/blockmode [warn|mute|ban|delete] - Set enforcement mode"""
 
 
 admins_in_chat = {}
@@ -975,6 +981,245 @@ async def toggle_admin_log(_, message: Message):
         f"✅ Admin logging is now **{status}**.\n\n"
         f"{'All admin actions will be logged.' if not current else 'Admin actions will not be logged.'}"
     )
+
+
+# ============= BLOCKLIST SYSTEM =============
+
+@app.on_message(filters.command("addblocklist") & filters.group)
+@adminsOnly("can_restrict_members")
+async def add_blocklist(_, message: Message):
+    """Add multiple triggers to blocklist."""
+    lines = message.text.splitlines()
+    
+    if len(lines) < 2:
+        return await message.reply_text(
+            "Usage:\n"
+            "/addblocklist\n"
+            "word\n"
+            "phrase here\n"
+            "another phrase"
+        )
+    
+    triggers = []
+    for line in lines[1:]:
+        t = line.strip().lower()
+        if len(t) < 2:
+            continue
+        triggers.append(t)
+    
+    if not triggers:
+        return await message.reply_text("No valid blocklist items found.")
+    
+    # Get existing blocklist
+    existing = await db.blocklist.find_one({"chat_id": message.chat.id})
+    if existing:
+        # Merge with existing, avoiding duplicates
+        current_triggers = set(existing.get("triggers", []))
+        new_triggers = set(triggers)
+        all_triggers = list(current_triggers.union(new_triggers))
+        added = len(all_triggers) - len(current_triggers)
+        
+        await db.blocklist.update_one(
+            {"chat_id": message.chat.id},
+            {"$set": {"triggers": all_triggers}}
+        )
+    else:
+        # Create new blocklist
+        await db.blocklist.insert_one({
+            "chat_id": message.chat.id,
+            "triggers": triggers,
+            "mode": "warn"  # default mode
+        })
+        added = len(triggers)
+    
+    await message.reply_text(
+        f"✅ Added {added} blocklist item(s)."
+    )
+
+
+@app.on_message(filters.command("rmblocklist") & filters.group)
+@adminsOnly("can_restrict_members")
+async def remove_blocklist(_, message: Message):
+    """Remove triggers from blocklist."""
+    lines = message.text.splitlines()
+    
+    if len(lines) < 2:
+        return await message.reply_text(
+            "Usage:\n"
+            "/rmblocklist\n"
+            "word\n"
+            "phrase to remove"
+        )
+    
+    triggers_to_remove = []
+    for line in lines[1:]:
+        t = line.strip().lower()
+        if len(t) < 2:
+            continue
+        triggers_to_remove.append(t)
+    
+    if not triggers_to_remove:
+        return await message.reply_text("No valid items to remove.")
+    
+    existing = await db.blocklist.find_one({"chat_id": message.chat.id})
+    if not existing:
+        return await message.reply_text("No blocklist found for this chat.")
+    
+    current_triggers = set(existing.get("triggers", []))
+    remove_set = set(triggers_to_remove)
+    remaining = list(current_triggers - remove_set)
+    removed = len(current_triggers) - len(remaining)
+    
+    if remaining:
+        await db.blocklist.update_one(
+            {"chat_id": message.chat.id},
+            {"$set": {"triggers": remaining}}
+        )
+    else:
+        # Remove entire document if no triggers left
+        await db.blocklist.delete_one({"chat_id": message.chat.id})
+    
+    await message.reply_text(
+        f"✅ Removed {removed} blocklist item(s)."
+    )
+
+
+@app.on_message(filters.command("blocklist") & filters.group)
+@adminsOnly("can_restrict_members")
+async def show_blocklist(_, message: Message):
+    """Show current blocklist."""
+    data = await db.blocklist.find_one({"chat_id": message.chat.id})
+    
+    if not data or not data.get("triggers"):
+        return await message.reply_text("🚫 No blocklist items set.")
+    
+    triggers = data["triggers"]
+    mode = data.get("mode", "warn")
+    
+    text = f"🚫 **Blocked Triggers ({len(triggers)})**\n\n"
+    text += f"Mode: `{mode}`\n\n"
+    
+    for i, trigger in enumerate(triggers[:20], 1):  # Show first 20
+        text += f"{i}. `{trigger}`\n"
+    
+    if len(triggers) > 20:
+        text += f"\n... and {len(triggers) - 20} more"
+    
+    await message.reply_text(text)
+
+
+@app.on_message(filters.command("blockmode") & filters.group)
+@adminsOnly("can_restrict_members")
+async def set_block_mode(_, message: Message):
+    """Set blocklist enforcement mode."""
+    if len(message.command) < 2:
+        return await message.reply_text(
+            "Usage: /blockmode [warn|mute|ban|delete]\n\n"
+            "• warn: Warn user and delete message\n"
+            "• mute: Mute user for 5 minutes\n"
+            "• ban: Ban user\n"
+            "• delete: Just delete message"
+        )
+    
+    mode = message.command[1].lower()
+    if mode not in ["warn", "mute", "ban", "delete"]:
+        return await message.reply_text("Invalid mode. Use: warn, mute, ban, or delete")
+    
+    # Update or create blocklist with new mode
+    existing = await db.blocklist.find_one({"chat_id": message.chat.id})
+    if existing:
+        await db.blocklist.update_one(
+            {"chat_id": message.chat.id},
+            {"$set": {"mode": mode}}
+        )
+    else:
+        await db.blocklist.insert_one({
+            "chat_id": message.chat.id,
+            "triggers": [],
+            "mode": mode
+        })
+    
+    await message.reply_text(f"✅ Blocklist mode set to: `{mode}`")
+
+
+@app.on_message(filters.text & ~filters.private)
+async def blocklist_watcher(_, message: Message):
+    """Watch messages for blocked content."""
+    if not message.from_user:
+        return
+    
+    chat_id = message.chat.id
+    user = message.from_user
+    
+    # Skip admins and sudo
+    if user.id in SUDOERS_SET:
+        return
+    
+    try:
+        member = await app.get_chat_member(chat_id, user.id)
+        if member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+            return
+    except:
+        pass
+    
+    # Get blocklist
+    data = await db.blocklist.find_one({"chat_id": chat_id})
+    if not data or not data.get("triggers"):
+        return
+    
+    text = message.text.lower()
+    triggers = data["triggers"]
+    mode = data.get("mode", "warn")
+    
+    # Check each trigger
+    for trigger in triggers:
+        if " " in trigger:
+            # Phrase - exact substring match
+            if trigger in text:
+                await enforce_blocklist(message, trigger, mode)
+                break
+        else:
+            # Word - word boundary match
+            if re.search(rf"\b{re.escape(trigger)}\b", text):
+                await enforce_blocklist(message, trigger, mode)
+                break
+
+
+async def enforce_blocklist(message: Message, trigger: str, mode: str):
+    """Enforce blocklist violation."""
+    await message.delete()
+    
+    reason = (
+        f"🚫 **Blocked Word Detected**\n"
+        f"User: {message.from_user.mention}\n"
+        f"Trigger: `{trigger}`"
+    )
+    
+    # Send notification (auto-delete after 15 seconds)
+    msg = await message.chat.send_message(reason)
+    asyncio.create_task(delete_after_delay(msg, 15))
+    
+    if mode == "warn":
+        await add_warn(
+            message.chat.id,
+            await int_to_alpha(message.from_user.id),
+            {},
+        )
+    elif mode == "mute":
+        await message.chat.restrict_member(
+            message.from_user.id,
+            permissions=ChatPermissions(),
+            until_date=int(time()) + 300,  # 5 minutes
+        )
+    elif mode == "ban":
+        await message.chat.ban_member(message.chat.id, message.from_user.id)
+
+
+async def delete_after_delay(message, delay_seconds):
+    """Delete message after delay."""
+    await asyncio.sleep(delay_seconds)
+    with suppress(Exception):
+        await message.delete()
 
 
 
