@@ -16,6 +16,17 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
+async def init_storage():
+    """Initialize SQLite storage."""
+    try:
+        # Ensure database file exists and is accessible
+        conn = get_db()
+        conn.close()
+        logger.info("SQLite storage initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize SQLite storage: {e}")
+        raise
+
 # For backward compatibility, create a dummy 'db' object
 class SQLiteDB:
     """Dummy class for compatibility with old MongoDB code."""
