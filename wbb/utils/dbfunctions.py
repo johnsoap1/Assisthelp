@@ -85,7 +85,8 @@ async def get_notes_count() -> dict:
     """Get total count of notes and chats with notes."""
     chats_count = 0
     notes_count = 0
-    async for chat in notesdb.find({"chat_id": {"$exists": 1}}):
+    cursor = await notesdb.find({"chat_id": {"$exists": 1}})
+    async for chat in cursor:
         notes_name = await get_note_names(chat["chat_id"])
         notes_count += len(notes_name)
         chats_count += 1
@@ -147,14 +148,12 @@ async def get_filters_count() -> dict:
     """Get total count of filters and chats with filters."""
     chats_count = 0
     filters_count = 0
-    async for chat in filtersdb.find({"chat_id": {"$lt": 0}}):
+    cursor = await filtersdb.find({"chat_id": {"$lt": 0}})
+    async for chat in cursor:
         filters_name = await get_filters_names(chat["chat_id"])
         filters_count += len(filters_name)
         chats_count += 1
-    return {
-        "chats_count": chats_count,
-        "filters_count": filters_count,
-    }
+    return {"chats_count": chats_count, "filters_count": filters_count}
 
 
 async def _get_filters(chat_id: int) -> Dict[str, dict]:
@@ -280,7 +279,8 @@ async def get_warns_count() -> dict:
     """Get total count of warns and chats with warns."""
     chats_count = 0
     warns_count = 0
-    async for chat in warnsdb.find({"chat_id": {"$lt": 0}}):
+    cursor = await warnsdb.find({"chat_id": {"$lt": 0}})
+    async for chat in cursor:
         for user in chat.get("warns", {}):
             warns_count += chat["warns"][user].get("warns", 0)
         chats_count += 1
@@ -331,7 +331,8 @@ async def get_karmas_count() -> dict:
     """Get total count of karma and chats with karma."""
     chats_count = 0
     karmas_count = 0
-    async for chat in karmadb.find({"chat_id": {"$lt": 0}}):
+    cursor = await karmadb.find({"chat_id": {"$lt": 0}})
+    async for chat in cursor:
         for i in chat.get("karma", {}):
             karma_ = chat["karma"][i].get("karma", 0)
             if karma_ > 0:
@@ -343,11 +344,12 @@ async def get_karmas_count() -> dict:
 async def user_global_karma(user_id: int) -> int:
     """Get total karma for a user across all chats."""
     total_karma = 0
-    async for chat in karmadb.find({"chat_id": {"$lt": 0}}):
+    cursor = await karmadb.find({"chat_id": {"$lt": 0}})
+    async for chat in cursor:
         user_alpha = await int_to_alpha(user_id)
         karma = chat.get("karma", {}).get(user_alpha)
         if karma and int(karma.get("karma", 0)) > 0:
-            total_karma += int(karma["karma"])
+            total_karma += int(karma.get("karma", 0))
     return total_karma
 
 
@@ -406,10 +408,14 @@ async def is_served_chat(chat_id: int) -> bool:
 
 async def get_served_chats() -> list:
     """Get list of all served chats."""
-    chats_list = []
-    async for chat in chatsdb.find({"chat_id": {"$lt": 0}}):
-        chats_list.append(int(chat["chat_id"]))
-    return chats_list
+    cursor = await chatsdb.find({"chat_id": {"$lt": 0}})
+    return [int(chat["chat_id"]) async for chat in cursor]
+
+
+async def get_served_users() -> list:
+    """Get list of all served users."""
+    cursor = await usersdb.find({"user_id": {"$gt": 0}})
+    return [int(user["user_id"]) async for user in cursor]
 
 
 async def add_served_chat(chat_id: int):
@@ -454,7 +460,8 @@ async def add_served_user(user_id: int):
 
 async def get_gbans_count() -> int:
     """Get count of globally banned users."""
-    return len([i async for i in gbansdb.find({"user_id": {"$gt": 0}})])
+    cursor = await gbansdb.find({"user_id": {"$gt": 0}})
+    return len([i async for i in cursor])
 
 
 async def is_gbanned_user(user_id: int) -> bool:
@@ -717,14 +724,12 @@ async def get_blacklist_filters_count() -> dict:
     """Get count of blacklist filters and chats."""
     chats_count = 0
     filters_count = 0
-    async for chat in blacklist_filtersdb.find({"chat_id": {"$lt": 0}}):
+    cursor = await blacklist_filtersdb.find({"chat_id": {"$lt": 0}})
+    async for chat in cursor:
         filters = await get_blacklisted_words(chat["chat_id"])
         filters_count += len(filters)
         chats_count += 1
-    return {
-        "chats_count": chats_count,
-        "filters_count": filters_count,
-    }
+    return {"chats_count": chats_count, "filters_count": filters_count}
 
 
 async def get_blacklisted_words(chat_id: int) -> List[str]:
@@ -763,10 +768,8 @@ async def delete_blacklist_filter(chat_id: int, word: str) -> bool:
 
 async def blacklisted_chats() -> list:
     """Get list of blacklisted chats."""
-    blacklist_chat = []
-    async for chat in blacklist_chatdb.find({"chat_id": {"$lt": 0}}):
-        blacklist_chat.append(chat["chat_id"])
-    return blacklist_chat
+    cursor = await blacklist_chatdb.find({"chat_id": {"$lt": 0}})
+    return [chat["chat_id"] async for chat in cursor]
 
 
 async def blacklist_chat(chat_id: int) -> bool:
@@ -948,16 +951,15 @@ async def is_rss_active(chat_id: int) -> bool:
 
 async def get_rss_feeds() -> list:
     """Get list of all active RSS feeds."""
-    data = []
-    async for feed in rssdb.find({"chat_id": {"$exists": 1}}):
-        data.append(
-            dict(
-                chat_id=feed["chat_id"],
-                url=feed["url"],
-                last_title=feed["last_title"],
-            )
+    cursor = await rssdb.find({"chat_id": {"$exists": 1}})
+    return [
+        dict(
+            chat_id=feed["chat_id"],
+            url=feed["url"],
+            last_title=feed["last_title"],
         )
-    return data
+        async for feed in cursor
+    ]
 
 
 async def get_rss_feeds_count() -> int:

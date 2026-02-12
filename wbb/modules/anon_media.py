@@ -1,4 +1,4 @@
-"""
+file: """"
 Anonymous Media Repost Module - Makes bot repost user media anonymously
 """
 import asyncio
