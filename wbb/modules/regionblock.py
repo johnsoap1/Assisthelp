@@ -8,6 +8,7 @@ from wbb import app, SUDOERS, SUDOERS_SET
 import logging
 import re
 from pyrogram import Client
+from pyrogram.types import ChatMember
 from wbb.utils.dbfunctions import (
     add_blocked_country, add_blocked_lang, remove_blocked_country,
     remove_blocked_lang, get_chat_blocks, clear_chat_blocks
