@@ -31,7 +31,11 @@ Path("sessions").mkdir(exist_ok=True)
 MOD_LOAD = []
 MOD_NOLOAD = []
 SUDOERS_SET = set()  # actual user IDs
-SUDOERS = filters.user(list(SUDOERS_SET))
+
+def sudo_filter(_, __, message):
+    return message.from_user and message.from_user.id in SUDOERS_SET
+
+SUDOERS = filters.create(sudo_filter)
 bot_start_time = time.time()
 
 
@@ -103,7 +107,6 @@ async def load_sudoers():
     conn.close()
     
     SUDOERS_SET = set(sudoers_list)
-    SUDOERS = filters.user(list(SUDOERS_SET))
     log.info(f"Loaded SUDOERS: {SUDOERS_SET}")
 
 
