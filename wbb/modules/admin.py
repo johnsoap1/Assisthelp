@@ -340,7 +340,7 @@ async def unban_func(_, message: Message):
 # Ban users listed in a message
 
 
-@app.on_message(filters.user(list(SUDOERS)) & filters.command("listban") & ~filters.chat(ChatType.PRIVATE))
+@app.on_message(SUDOERS & filters.command("listban") & ~filters.chat(ChatType.PRIVATE))
 async def list_ban_(c, message: Message):
     """Ban a user from multiple groups listed in a message."""
     userid, msglink_reason = await extract_user_and_reason(message)
@@ -403,7 +403,7 @@ async def list_ban_(c, message: Message):
 # Unban users listed in a message
 
 
-@app.on_message(filters.user(list(SUDOERS)) & filters.command("listunban") & ~filters.chat(ChatType.PRIVATE))
+@app.on_message(SUDOERS & filters.command("listunban") & ~filters.chat(ChatType.PRIVATE))
 async def list_unban_(c, message: Message):
     """Unban a user from multiple groups listed in a message."""
     userid, msglink = await extract_user_and_reason(message)
