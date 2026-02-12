@@ -132,3 +132,17 @@ async def time_converter(message, time_value: str):
     else:
         return await message.reply_text("Incorrect time specified.")
     return temp_time
+
+
+async def check_format(ikb, raw_text: str):
+    keyb = re.findall(r"\[.+\,.+\]", raw_text)
+    if keyb and not "~" in raw_text:
+        raw_text = raw_text.replace("button=", "\n~\nbutton=")
+        return raw_text
+    if "~" in raw_text and keyb:
+        if not extract_text_and_keyb(ikb, raw_text):
+            return ""
+        else:
+            return raw_text
+    else:
+        return raw_text
