@@ -1129,3 +1129,96 @@ async def get_served_users() -> list:
         fetchall=True
     )
     return [row[0] for row in results]
+
+
+# Blacklist functions
+async def get_blacklisted_words(chat_id: int) -> list:
+    """Get all blacklisted words for a chat."""
+    results = await async_db(
+        "SELECT word FROM blacklist WHERE chat_id = ? AND word IS NOT NULL",
+        (chat_id,),
+        fetchall=True
+    )
+    return [row[0] for row in results]
+
+
+async def save_blacklist_filter(chat_id: int, word: str):
+    """Add a word to blacklist."""
+    await async_db(
+        "INSERT OR IGNORE INTO blacklist (chat_id, word) VALUES (?, ?)",
+        (chat_id, word.lower())
+    )
+
+
+async def delete_blacklist_filter(chat_id: int, word: str) -> bool:
+    """Remove a word from blacklist."""
+    result = await async_db(
+        "DELETE FROM blacklist WHERE chat_id = ? AND word = ?",
+        (chat_id, word.lower())
+    )
+    return result > 0
+
+
+async def get_blacklist_settings(chat_id: int) -> dict:
+    """Get blacklist settings for a chat."""
+    result = await async_db(
+        "SELECT settings FROM blacklist WHERE chat_id = ? AND word IS NULL",
+        (chat_id,),
+        fetchone=True
+    )
+    
+    if result and result[0]:
+        return json.loads(result[0])
+    return {}
+
+
+async def update_blacklist_settings(chat_id: int, settings: dict):
+    """Update blacklist settings for a chat."""
+    settings_json = json.dumps(settings)
+    
+    await async_db(
+        """INSERT OR REPLACE INTO blacklist (chat_id, word, settings) 
+           VALUES (?, NULL, ?)""",
+        (chat_id, settings_json)
+    )
+
+
+async def get_blacklist_stats(chat_id: int) -> dict:
+    """Get blacklist statistics for a chat."""
+    result = await async_db(
+        "SELECT stats FROM blacklist WHERE chat_id = ? AND word IS NULL",
+        (chat_id,),
+        fetchone=True
+    )
+    
+    if result and result[0]:
+        return json.loads(result[0])
+    return {}
+
+
+async def update_blacklist_stats(chat_id: int, word: str, user_id: int):
+    """Update blacklist trigger statistics."""
+    # Get current stats
+    stats = await get_blacklist_stats(chat_id)
+    
+    # Update total triggers
+    stats['total_triggers'] = stats.get('total_triggers', 0) + 1
+    
+    # Update word count
+    by_word = stats.get('by_word', {})
+    by_word[word] = by_word.get(word, 0) + 1
+    stats['by_word'] = by_word
+    
+    # Update user count
+    by_user = stats.get('by_user', {})
+    by_user[str(user_id)] = by_user.get(str(user_id), 0) + 1
+    stats['by_user'] = by_user
+    
+    # Save updated stats - use a separate column for stats
+    stats_json = json.dumps(stats)
+    
+    await async_db(
+        """INSERT OR REPLACE INTO blacklist (chat_id, word, settings, stats) 
+           VALUES (?, NULL, ?, ?)""",
+        (chat_id, json.dumps({}), stats_json)
+    )
