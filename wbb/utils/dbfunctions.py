@@ -107,6 +107,14 @@ def init_tables():
         )
     """)
     
+    # Global bans table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS gbans (
+            user_id INTEGER PRIMARY KEY,
+            banned_at INTEGER
+        )
+    """)
+    
     conn.commit()
     conn.close()
 
@@ -1078,3 +1086,46 @@ async def record_trigger_usage_db(chat_id: int, trigger: str):
             "INSERT INTO trigger_stats (chat_id, trigger, count, last_used) VALUES (?, ?, ?, ?)",
             (chat_id, trigger_lower, 1, int(time.time()))
         )
+
+
+# Gban functions
+async def add_gban_user(user_id: int):
+    """Add user to global ban list."""
+    await async_db(
+        "INSERT OR IGNORE INTO gbans (user_id, banned_at) VALUES (?, ?)",
+        (user_id, int(time.time()))
+    )
+
+
+async def remove_gban_user(user_id: int):
+    """Remove user from global ban list."""
+    await async_db("DELETE FROM gbans WHERE user_id = ?", (user_id,))
+
+
+async def is_gbanned_user(user_id: int) -> bool:
+    """Check if user is globally banned."""
+    result = await async_db(
+        "SELECT user_id FROM gbans WHERE user_id = ?",
+        (user_id,),
+        fetchone=True
+    )
+    return bool(result)
+
+
+# Statistics functions
+async def get_served_chats() -> list:
+    """Get list of served chat IDs."""
+    results = await async_db(
+        "SELECT DISTINCT chat_id FROM chat_members WHERE left_date IS NULL",
+        fetchall=True
+    )
+    return [row[0] for row in results]
+
+
+async def get_served_users() -> list:
+    """Get list of served user IDs."""
+    results = await async_db(
+        "SELECT DISTINCT user_id FROM chat_members WHERE left_date IS NULL",
+        fetchall=True
+    )
+    return [row[0] for row in results]
