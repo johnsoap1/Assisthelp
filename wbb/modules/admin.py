@@ -19,6 +19,8 @@ from pyrogram.types import (
     Message,
 )
 
+from wbb.core.storage import db
+
 from wbb import BOT_ID, SUDOERS, SUDOERS_SET, app, log
 
 
