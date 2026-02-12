@@ -1,53 +1,55 @@
 """
-Anonymous Media Repost Module - Makes bot repost user media anonymously
+Anonymous Media Repost - FULL Production Version
+Persistent | Restart Safe | Per-Chat Config
 """
+
 import asyncio
 import time
 from collections import defaultdict, deque
-from dataclasses import dataclass
-from typing import Dict, Set, Optional
+from datetime import datetime
 
-from pyrogram import Client, filters
-from pyrogram.errors import FloodWait, ChatAdminRequired, MessageDeleteForbidden
+from pyrogram import filters
 from pyrogram.types import Message
+from pyrogram.errors import FloodWait, MessageDeleteForbidden, ChatAdminRequired, MediaEmpty
+
+from wbb import app, SUDOERS_SET
+from wbb.core.decorators.errors import capture_err
+from wbb.utils.anon_db import (
+    get_or_create_chat,
+    enable_chat,
+    disable_chat,
+    is_enabled,
+    get_whitelist,
+    add_whitelist,
+    remove_whitelist,
+)
 
 # =========================
-# CONFIGURATION
+# RATE LIMIT MEMORY CACHE
 # =========================
 
-RATE_LIMIT_COUNT = 5
-RATE_LIMIT_WINDOW = 10  # seconds
+rate_cache = defaultdict(lambda: deque())
 
 
-# =========================
-# DATA STORAGE (IN-MEMORY)
-# =========================
-
-enabled_chats: Set[int] = set()
-whitelisted_users: Dict[int, Set[int]] = defaultdict(set)
-rate_limit_tracker: Dict[int, deque] = defaultdict(lambda: deque(maxlen=RATE_LIMIT_COUNT))
-
-
-@dataclass
-class ChatStats:
-    total_processed: int = 0
-    total_deleted: int = 0
-    total_reposted: int = 0
-    total_errors: int = 0
+def is_supported(message: Message, allowed_types: list):
+    mapping = {
+        "photo": message.photo,
+        "video": message.video,
+        "document": message.document,
+        "audio": message.audio,
+        "voice": message.voice,
+        "animation": message.animation,
+        "sticker": message.sticker,
+        "video_note": message.video_note,
+    }
+    return any(mapping[t] for t in allowed_types if t in mapping)
 
 
-stats: Dict[int, ChatStats] = defaultdict(ChatStats)
-
-
-# =========================
-# UTILITY FUNCTIONS
-# =========================
-
-async def safe_delete(message: Message) -> bool:
+async def safe_delete(message: Message):
     try:
         await message.delete()
         return True
-    except (ChatAdminRequired, MessageDeleteForbidden):
+    except (MessageDeleteForbidden, ChatAdminRequired):
         return False
     except FloodWait as e:
         await asyncio.sleep(e.value)
@@ -56,178 +58,135 @@ async def safe_delete(message: Message) -> bool:
         return False
 
 
-async def safe_send(client: Client, message: Message) -> bool:
+async def safe_send(message: Message):
+    chat_id = message.chat.id
     try:
         if message.photo:
-            await client.send_photo(
-                chat_id=message.chat.id,
-                photo=message.photo.file_id,
-                caption=message.caption or "",
-                has_spoiler=message.has_media_spoiler or False
-            )
-
+            await app.send_photo(chat_id, message.photo.file_id, caption=message.caption or "")
         elif message.video:
-            await client.send_video(
-                chat_id=message.chat.id,
-                video=message.video.file_id,
-                caption=message.caption or "",
-                has_spoiler=message.has_media_spoiler or False
-            )
-
+            await app.send_video(chat_id, message.video.file_id, caption=message.caption or "")
         elif message.document:
-            await client.send_document(
-                chat_id=message.chat.id,
-                document=message.document.file_id,
-                caption=message.caption or ""
-            )
-
+            await app.send_document(chat_id, message.document.file_id, caption=message.caption or "")
         elif message.audio:
-            await client.send_audio(
-                chat_id=message.chat.id,
-                audio=message.audio.file_id,
-                caption=message.caption or ""
-            )
-
+            await app.send_audio(chat_id, message.audio.file_id, caption=message.caption or "")
         elif message.voice:
-            await client.send_voice(
-                chat_id=message.chat.id,
-                voice=message.voice.file_id,
-                caption=message.caption or ""
-            )
-
+            await app.send_voice(chat_id, message.voice.file_id)
+        elif message.animation:
+            await app.send_animation(chat_id, message.animation.file_id)
+        elif message.sticker:
+            await app.send_sticker(chat_id, message.sticker.file_id)
+        elif message.video_note:
+            await app.send_video_note(chat_id, message.video_note.file_id)
         else:
             return False
-
         return True
-
     except FloodWait as e:
         await asyncio.sleep(e.value)
-        return await safe_send(client, message)
+        return await safe_send(message)
+    except MediaEmpty:
+        return False
     except Exception:
         return False
 
 
-def is_rate_limited(chat_id: int) -> bool:
-    now = time.time()
-    timestamps = rate_limit_tracker[chat_id]
-
-    while timestamps and now - timestamps[0] > RATE_LIMIT_WINDOW:
-        timestamps.popleft()
-
-    if len(timestamps) >= RATE_LIMIT_COUNT:
-        return True
-
-    timestamps.append(now)
-    return False
-
-
-def is_media(message: Message) -> bool:
-    return any([
-        message.photo,
-        message.video,
-        message.document,
-        message.audio,
-        message.voice
-    ])
-
-
-# =========================
-# MAIN HANDLER
-# =========================
-
-@Client.on_message(filters.group & ~filters.service, group=100)
-async def anonymous_media_handler(client: Client, message: Message):
+@app.on_message(filters.group & ~filters.service, group=100)
+@capture_err
+async def anonymous_handler(_, message: Message):
     chat_id = message.chat.id
 
-    if chat_id not in enabled_chats:
+    if not is_enabled(chat_id):
         return
 
-    if not message.from_user:
+    if not message.from_user or message.from_user.is_bot:
         return
 
-    if message.from_user.is_bot:
+    chat = get_or_create_chat(chat_id)
+
+    whitelist = get_whitelist(chat_id)
+    if message.from_user.id in whitelist:
         return
 
-    if not is_media(message):
+    allowed_types = chat.media_types.split(",")
+
+    if not is_supported(message, allowed_types):
         return
 
-    if message.from_user.id in whitelisted_users[chat_id]:
+    # Rate limit
+    now = time.time()
+    queue = rate_cache[chat_id]
+
+    while queue and now - queue[0] > chat.rate_limit_window:
+        queue.popleft()
+
+    if len(queue) >= chat.rate_limit_count:
         return
 
-    if is_rate_limited(chat_id):
-        return
-
-    chat_stats = stats[chat_id]
-    chat_stats.total_processed += 1
+    queue.append(now)
 
     deleted = await safe_delete(message)
     if not deleted:
-        chat_stats.total_errors += 1
+        chat.total_errors += 1
         return
 
-    chat_stats.total_deleted += 1
+    chat.total_deleted += 1
 
-    reposted = await safe_send(client, message)
-    if reposted:
-        chat_stats.total_reposted += 1
+    sent = await safe_send(message)
+    if sent:
+        chat.total_reposted += 1
     else:
-        chat_stats.total_errors += 1
+        chat.total_errors += 1
+
+    get_or_create_chat(chat_id)
+    from wbb.utils.database import SESSION
+    SESSION.commit()
 
 
 # =========================
 # COMMANDS
 # =========================
 
-@Client.on_message(filters.command("anon_enable") & filters.group)
-async def enable_anonymous(_, message: Message):
-    member = await message.chat.get_member(message.from_user.id)
-    if not member.privileges or not member.privileges.can_delete_messages:
-        return await message.reply("You must be admin with delete permission.")
-
-    enabled_chats.add(message.chat.id)
-    await message.reply("Anonymous media mode enabled.")
+@app.on_message(filters.command("anon_enable") & filters.user(list(SUDOERS_SET)))
+async def cmd_enable(_, message: Message):
+    chat_id = int(message.command[1])
+    enable_chat(chat_id)
+    await message.reply(f"Anonymous enabled for {chat_id}")
 
 
-@Client.on_message(filters.command("anon_disable") & filters.group)
-async def disable_anonymous(_, message: Message):
-    member = await message.chat.get_member(message.from_user.id)
-    if not member.privileges or not member.privileges.can_delete_messages:
-        return await message.reply("You must be admin with delete permission.")
-
-    enabled_chats.discard(message.chat.id)
-    await message.reply("Anonymous media mode disabled.")
+@app.on_message(filters.command("anon_disable") & filters.user(list(SUDOERS_SET)))
+async def cmd_disable(_, message: Message):
+    chat_id = int(message.command[1])
+    disable_chat(chat_id)
+    await message.reply(f"Anonymous disabled for {chat_id}")
 
 
-@Client.on_message(filters.command("anon_whitelist") & filters.group)
-async def whitelist_user(_, message: Message):
-    if not message.reply_to_message:
-        return await message.reply("Reply to a user to whitelist them.")
-
-    member = await message.chat.get_member(message.from_user.id)
-    if not member.privileges or not member.privileges.can_delete_messages:
-        return await message.reply("You must be admin.")
-
-    user_id = message.reply_to_message.from_user.id
-    whitelisted_users[message.chat.id].add(user_id)
-
-    await message.reply("User whitelisted.")
+@app.on_message(filters.command("anon_whitelist_add") & filters.user(list(SUDOERS_SET)))
+async def cmd_w_add(_, message: Message):
+    chat_id = int(message.command[1])
+    user_id = int(message.command[2])
+    add_whitelist(chat_id, user_id)
+    await message.reply("User added to whitelist.")
 
 
-@Client.on_message(filters.command("anon_stats") & filters.group)
-async def show_stats(_, message: Message):
-    chat_id = message.chat.id
-    chat_stats = stats.get(chat_id)
+@app.on_message(filters.command("anon_whitelist_remove") & filters.user(list(SUDOERS_SET)))
+async def cmd_w_remove(_, message: Message):
+    chat_id = int(message.command[1])
+    user_id = int(message.command[2])
+    remove_whitelist(chat_id, user_id)
+    await message.reply("User removed from whitelist.")
 
-    if not chat_stats:
-        return await message.reply("No stats available yet.")
+
+@app.on_message(filters.command("anon_stats") & filters.user(list(SUDOERS_SET)))
+async def cmd_stats(_, message: Message):
+    chat_id = int(message.command[1])
+    chat = get_or_create_chat(chat_id)
 
     text = (
-        f"Processed: {chat_stats.total_processed}\n"
-        f"Deleted: {chat_stats.total_deleted}\n"
-        f"Reposted: {chat_stats.total_reposted}\n"
-        f"Errors: {chat_stats.total_errors}"
+        f"Reposted: {chat.total_reposted}\n"
+        f"Deleted: {chat.total_deleted}\n"
+        f"Errors: {chat.total_errors}\n"
+        f"Rate Limit: {chat.rate_limit_count}/{chat.rate_limit_window}s\n"
+        f"Media Types: {chat.media_types}"
     )
-
     await message.reply(text)
 
 
@@ -237,26 +196,16 @@ async def show_stats(_, message: Message):
 
 __MODULE__ = "Anonymous Media"
 __HELP__ = """
-**ANONYMOUS MEDIA REPOST MODULE**
+**ANONYMOUS MEDIA REPOST**
 
-Automatically deletes user media and reposts it as the bot, making all media anonymous.
+Persistent, restart-safe anonymous media reposting with per-chat configuration.
 
-**Admin Commands:**
-/anon_enable [CHAT_ID]
-    Enable anonymous mode in a group
-    
-/anon_disable [CHAT_ID]
-    Disable anonymous mode in a group
-    
-/anon_status [CHAT_ID]
-    Check status and statistics
-    
-/anon_whitelist_add [CHAT_ID] [USER_ID]
-    Whitelist a user (their media won't be anonymized)
-    
-/anon_whitelist_remove [CHAT_ID] [USER_ID]
-    Remove user from whitelist
-    
+**Admin Commands (Sudoers Only):**
+- `/anon_enable [chat_id]` - Enable anonymous mode
+- `/anon_disable [chat_id]` - Disable anonymous mode
+- `/anon_whitelist_add [chat_id] [user_id]` - Add user to whitelist
+- `/anon_whitelist_remove [chat_id] [user_id]` - Remove user from whitelist
+- `/anon_stats [chat_id]` - Show statistics and settings
 /anon_whitelist_show [CHAT_ID]
     Show all whitelisted users
     
