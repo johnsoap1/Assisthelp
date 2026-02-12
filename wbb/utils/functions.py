@@ -43,13 +43,13 @@ from pyrogram.enums import MessageEntityType
 from pyrogram.types import Message
 
 from wbb import aiohttpsession as aiosession
-from wbb.utils.dbfunctions import start_restart_stage
+from wbb.utils.dbfunctions import set_restart_stage
 from wbb.utils.http import get, post
 
 
 async def restart(m: Message):
     if m:
-        await start_restart_stage(m.chat.id, m.id)
+        await set_restart_stage(m.chat.id, m.id)
     execvp(executable, [executable, "-m", "wbb"])
 
 
