@@ -4,8 +4,6 @@ Helps prevent spam, bot attacks, and DDoS-like behavior
 Admins can block specific countries and language scripts
 """
 
-from pyrogram import filters, Client
-from pyrogram.types import Message, ChatMember
 from wbb import app, SUDOERS, SUDOERS_SET
 import logging
 import re

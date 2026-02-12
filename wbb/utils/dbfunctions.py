@@ -122,6 +122,142 @@ def init_tables():
         )
     """)
     
+    # Antiservice table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS antiservice (
+            chat_id INTEGER PRIMARY KEY,
+            enabled INTEGER DEFAULT 0,
+            settings TEXT
+        )
+    """)
+    
+    # Couples table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS couples (
+            chat_id INTEGER,
+            date TEXT,
+            couple_data TEXT,
+            PRIMARY KEY (chat_id, date)
+        )
+    """)
+    
+    # Filters table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS filters (
+            chat_id INTEGER,
+            name TEXT,
+            filter_data TEXT,
+            PRIMARY KEY (chat_id, name)
+        )
+    """)
+    
+    # Karma settings table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS karma_settings (
+            chat_id INTEGER PRIMARY KEY,
+            enabled INTEGER DEFAULT 0
+        )
+    """)
+    
+    # Karma data table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS karma (
+            chat_id INTEGER,
+            name TEXT,
+            karma_data TEXT,
+            PRIMARY KEY (chat_id, name)
+        )
+    """)
+    
+    # Media deduplication settings table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS media_dedupe_settings (
+            chat_id INTEGER PRIMARY KEY,
+            enabled INTEGER DEFAULT 0
+        )
+    """)
+    
+    # Media hashes table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS media_hashes (
+            chat_id INTEGER,
+            file_hash TEXT,
+            user_id INTEGER,
+            message_id INTEGER,
+            timestamp INTEGER,
+            PRIMARY KEY (chat_id, file_hash)
+        )
+    """)
+    
+    # Media stats table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS media_stats (
+            chat_id INTEGER,
+            user_id INTEGER,
+            photos INTEGER DEFAULT 0,
+            videos INTEGER DEFAULT 0,
+            total INTEGER DEFAULT 0,
+            last_media INTEGER,
+            PRIMARY KEY (chat_id, user_id)
+        )
+    """)
+    
+    # Region blocks table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS region_blocks (
+            chat_id INTEGER,
+            type TEXT,
+            value TEXT,
+            PRIMARY KEY (chat_id, type, value)
+        )
+    """)
+    
+    # Chat rules table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS chat_rules (
+            chat_id INTEGER PRIMARY KEY,
+            rules TEXT
+        )
+    """)
+    
+    # Triggers table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS triggers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER,
+            trigger TEXT,
+            responses TEXT,
+            use_regex INTEGER DEFAULT 0,
+            created_at INTEGER,
+            updated_at INTEGER
+        )
+    """)
+    
+    # Trigger usage table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS trigger_usage (
+            chat_id INTEGER,
+            trigger TEXT,
+            last_used INTEGER,
+            use_count INTEGER DEFAULT 0,
+            PRIMARY KEY (chat_id, trigger)
+        )
+    """)
+    
+    # Translate history table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS translate_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            source_text TEXT,
+            translated_text TEXT,
+            source_lang TEXT,
+            target_lang TEXT,
+            service TEXT,
+            timestamp INTEGER
+        )
+    """)
+    
     conn.commit()
     conn.close()
 
@@ -1266,3 +1402,634 @@ async def blacklisted_chats() -> list:
         return [row[0] for row in results]
     except:
         return []
+
+
+# Antiservice functions
+async def is_antiservice_on(chat_id: int) -> bool:
+    """Check if antiservice is enabled for a chat."""
+    result = await async_db(
+        "SELECT enabled FROM antiservice WHERE chat_id = ?",
+        (chat_id,),
+        fetchone=True
+    )
+    return bool(result and result[0])
+
+
+async def antiservice_on(chat_id: int):
+    """Enable antiservice for a chat."""
+    await async_db(
+        "INSERT OR REPLACE INTO antiservice (chat_id, enabled) VALUES (?, ?)",
+        (chat_id, 1)
+    )
+
+
+async def antiservice_off(chat_id: int):
+    """Disable antiservice for a chat."""
+    await async_db(
+        "INSERT OR REPLACE INTO antiservice (chat_id, enabled) VALUES (?, ?)",
+        (chat_id, 0)
+    )
+
+
+async def get_antiservice_settings(chat_id: int) -> dict:
+    """Get antiservice settings for a chat."""
+    result = await async_db(
+        "SELECT settings FROM antiservice WHERE chat_id = ?",
+        (chat_id,),
+        fetchone=True
+    )
+    
+    if result and result[0]:
+        return json.loads(result[0])
+    return {}
+
+
+async def update_antiservice_settings(chat_id: int, settings: dict):
+    """Update antiservice settings for a chat."""
+    settings_json = json.dumps(settings)
+    
+    await async_db(
+        """INSERT OR REPLACE INTO antiservice (chat_id, enabled, settings) 
+           VALUES (?, ?, ?)""",
+        (chat_id, 1, settings_json)
+    )
+
+
+# Couple functions
+async def get_couple(chat_id: int, date: str) -> dict:
+    """Get couple for a specific date."""
+    result = await async_db(
+        "SELECT couple_data FROM couples WHERE chat_id = ? AND date = ?",
+        (chat_id, date),
+        fetchone=True
+    )
+    
+    if result and result[0]:
+        return json.loads(result[0])
+    return None
+
+
+async def save_couple(chat_id: int, date: str, couple_data: dict):
+    """Save couple for a specific date."""
+    couple_json = json.dumps(couple_data)
+    
+    await async_db(
+        "INSERT OR REPLACE INTO couples (chat_id, date, couple_data) VALUES (?, ?, ?)",
+        (chat_id, date, couple_json)
+    )
+
+
+# Filter functions
+async def save_filter(chat_id: int, name: str, filter_data: dict):
+    """Save a filter for a chat."""
+    filter_json = json.dumps(filter_data)
+    
+    await async_db(
+        "INSERT OR REPLACE INTO filters (chat_id, name, filter_data) VALUES (?, ?, ?)",
+        (chat_id, name.lower(), filter_json)
+    )
+
+
+async def get_filter(chat_id: int, name: str) -> dict:
+    """Get a filter by name."""
+    result = await async_db(
+        "SELECT filter_data FROM filters WHERE chat_id = ? AND name = ?",
+        (chat_id, name.lower()),
+        fetchone=True
+    )
+    
+    if result and result[0]:
+        return json.loads(result[0])
+    return {}
+
+
+async def delete_filter(chat_id: int, name: str) -> bool:
+    """Delete a filter by name."""
+    result = await async_db(
+        "DELETE FROM filters WHERE chat_id = ? AND name = ?",
+        (chat_id, name.lower())
+    )
+    return result > 0
+
+
+async def get_filters_names(chat_id: int) -> list:
+    """Get list of filter names for a chat."""
+    results = await async_db(
+        "SELECT name FROM filters WHERE chat_id = ?",
+        (chat_id,),
+        fetchall=True
+    )
+    return [row[0] for row in results]
+
+
+async def deleteall_filters(chat_id: int) -> bool:
+    """Delete all filters for a chat."""
+    try:
+        await async_db("DELETE FROM filters WHERE chat_id = ?", (chat_id,))
+        return True
+    except:
+        return False
+
+
+# Statistics functions
+async def get_gbans_count() -> int:
+    """Get total number of global bans."""
+    result = await async_db("SELECT COUNT(*) FROM gbans", fetchone=True)
+    return result[0] if result else 0
+
+
+async def get_notes_count() -> dict:
+    """Get notes count statistics."""
+    # Count total notes
+    result = await async_db("SELECT COUNT(*) FROM notes", fetchone=True)
+    notes_count = result[0] if result else 0
+    
+    # Count chats with notes
+    result = await async_db("SELECT COUNT(DISTINCT chat_id) FROM notes", fetchone=True)
+    chats_count = result[0] if result else 0
+    
+    return {"notes_count": notes_count, "chats_count": chats_count}
+
+
+async def get_filters_count() -> dict:
+    """Get filters count statistics."""
+    # Count total filters
+    result = await async_db("SELECT COUNT(*) FROM filters", fetchone=True)
+    filters_count = result[0] if result else 0
+    
+    # Count chats with filters
+    result = await async_db("SELECT COUNT(DISTINCT chat_id) FROM filters", fetchone=True)
+    chats_count = result[0] if result else 0
+    
+    return {"filters_count": filters_count, "chats_count": chats_count}
+
+
+async def get_blacklist_filters_count() -> dict:
+    """Get blacklist filters count statistics."""
+    # Count total blacklist filters
+    result = await async_db("SELECT COUNT(*) FROM blacklist WHERE word IS NOT NULL", fetchone=True)
+    filters_count = result[0] if result else 0
+    
+    # Count chats with blacklist filters
+    result = await async_db("SELECT COUNT(DISTINCT chat_id) FROM blacklist WHERE word IS NOT NULL", fetchone=True)
+    chats_count = result[0] if result else 0
+    
+    return {"filters_count": filters_count, "chats_count": chats_count}
+
+
+async def get_warns_count() -> dict:
+    """Get warns count statistics."""
+    # Count total warns
+    result = await async_db("SELECT COUNT(*) FROM warns", fetchone=True)
+    warns_count = result[0] if result else 0
+    
+    # Count chats with warns
+    result = await async_db("SELECT COUNT(DISTINCT chat_id) FROM warns", fetchone=True)
+    chats_count = result[0] if result else 0
+    
+    return {"warns_count": warns_count, "chats_count": chats_count}
+
+
+async def get_karmas_count() -> dict:
+    """Get karmas count statistics."""
+    # Count total karma entries
+    result = await async_db("SELECT COUNT(*) FROM karma", fetchone=True)
+    karmas_count = result[0] if result else 0
+    
+    # Count chats with karma
+    result = await async_db("SELECT COUNT(DISTINCT chat_id) FROM karma", fetchone=True)
+    chats_count = result[0] if result else 0
+    
+    return {"karmas_count": karmas_count, "chats_count": chats_count}
+
+
+async def get_rss_feeds_count() -> int:
+    """Get total number of RSS feeds."""
+    # This might not exist in current schema, return 0 for now
+    return 0
+
+
+async def remove_served_chat(chat_id: int):
+    """Remove a chat from served chats (for cleanup)."""
+    # This is for cleaning up chats where bot is no longer present
+    # In SQLite version, we just remove from chat_members if needed
+    await async_db("DELETE FROM chat_members WHERE chat_id = ?", (chat_id,))
+
+
+# Karma functions
+async def user_global_karma(user_id: int) -> int:
+    """Get global karma for a user across all chats."""
+    result = await async_db(
+        "SELECT SUM(karma) FROM karma WHERE user_id = ?",
+        (user_id,),
+        fetchone=True
+    )
+    return result[0] if result and result[0] else 0
+
+
+# Karma functions
+async def get_karma(chat_id: int, name: str) -> dict:
+    """Get karma data for a specific user in a chat."""
+    result = await async_db(
+        "SELECT karma_data FROM karma WHERE chat_id = ? AND name = ?",
+        (chat_id, name),
+        fetchone=True
+    )
+    
+    if result and result[0]:
+        return json.loads(result[0])
+    return None
+
+
+async def get_karmas(chat_id: int) -> dict:
+    """Get all karma data for a chat."""
+    results = await async_db(
+        "SELECT name, karma_data FROM karma WHERE chat_id = ?",
+        (chat_id,),
+        fetchall=True
+    )
+    
+    karma_dict = {}
+    for row in results:
+        name, karma_data = row
+        karma_dict[name] = json.loads(karma_data)
+    
+    return karma_dict
+
+
+async def update_karma(chat_id: int, name: str, karma_data: dict):
+    """Update karma data for a user in a chat."""
+    karma_json = json.dumps(karma_data)
+    
+    await async_db(
+        "INSERT OR REPLACE INTO karma (chat_id, name, karma_data) VALUES (?, ?, ?)",
+        (chat_id, name, karma_json)
+    )
+
+
+async def is_karma_on(chat_id: int) -> bool:
+    """Check if karma system is enabled for a chat."""
+    result = await async_db(
+        "SELECT enabled FROM karma_settings WHERE chat_id = ?",
+        (chat_id,),
+        fetchone=True
+    )
+    return bool(result and result[0])
+
+
+async def karma_on(chat_id: int):
+    """Enable karma system for a chat."""
+    await async_db(
+        "INSERT OR REPLACE INTO karma_settings (chat_id, enabled) VALUES (?, ?)",
+        (chat_id, 1)
+    )
+
+
+async def karma_off(chat_id: int):
+    """Disable karma system for a chat."""
+    await async_db(
+        "INSERT OR REPLACE INTO karma_settings (chat_id, enabled) VALUES (?, ?, ?)",
+        (chat_id, 0)
+    )
+
+
+# Media deduplication functions
+async def is_dedupe_enabled(chat_id: int) -> bool:
+    """Check if deduplication is enabled for a chat."""
+    result = await async_db(
+        "SELECT enabled FROM media_dedupe_settings WHERE chat_id = ?",
+        (chat_id,),
+        fetchone=True
+    )
+    return bool(result and result[0])
+
+
+async def set_dedupe_enabled(chat_id: int, enabled: bool):
+    """Enable/disable deduplication for a chat."""
+    value = 1 if enabled else 0
+    await async_db(
+        "INSERT OR REPLACE INTO media_dedupe_settings (chat_id, enabled) VALUES (?, ?)",
+        (chat_id, value)
+    )
+
+
+async def check_duplicate_media(chat_id: int, file_hash: str) -> Optional[dict]:
+    """Check if media hash already exists."""
+    result = await async_db(
+        "SELECT user_id, message_id FROM media_hashes WHERE chat_id = ? AND file_hash = ?",
+        (chat_id, file_hash),
+        fetchone=True
+    )
+    
+    if result:
+        return {"user_id": result[0], "message_id": result[1]}
+    return None
+
+
+async def save_media_hash(chat_id: int, file_hash: str, user_id: int, message_id: int):
+    """Save media hash to prevent duplicates."""
+    await async_db(
+        "INSERT OR IGNORE INTO media_hashes (chat_id, file_hash, user_id, message_id, timestamp) VALUES (?, ?, ?, ?, ?)",
+        (chat_id, file_hash, user_id, message_id, int(time.time()))
+    )
+
+
+async def increment_user_media(chat_id: int, user_id: int, media_type: str):
+    """Increment user's media count."""
+    column = "photos" if media_type == "photo" else "videos"
+    
+    await async_db(
+        f"""INSERT OR REPLACE INTO media_stats (chat_id, user_id, photos, videos, total, last_media) 
+            VALUES (
+                ?,
+                ?,
+                COALESCE((SELECT photos FROM media_stats WHERE chat_id = ? AND user_id = ?), 0) + CASE WHEN ? = 'photos' THEN 1 ELSE 0 END,
+                COALESCE((SELECT videos FROM media_stats WHERE chat_id = ? AND user_id = ?), 0) + CASE WHEN ? = 'videos' THEN 1 ELSE 0 END,
+                COALESCE((SELECT total FROM media_stats WHERE chat_id = ? AND user_id = ?), 0) + 1,
+                ?
+            )""",
+        (chat_id, user_id, chat_id, user_id, column, chat_id, user_id, column, chat_id, user_id, int(time.time()))
+    )
+
+
+async def get_user_media_stats(chat_id: int, user_id: int) -> dict:
+    """Get user's media statistics."""
+    result = await async_db(
+        "SELECT photos, videos, total, last_media FROM media_stats WHERE chat_id = ? AND user_id = ?",
+        (chat_id, user_id),
+        fetchone=True
+    )
+    
+    if result:
+        return {
+            "photos": result[0] or 0,
+            "videos": result[1] or 0,
+            "total": result[2] or 0,
+            "last_media": result[3]
+        }
+    return {"photos": 0, "videos": 0, "total": 0, "last_media": None}
+
+
+async def get_media_leaderboard(chat_id: int, limit: int = 10) -> list:
+    """Get media leaderboard for a chat."""
+    results = await async_db(
+        "SELECT user_id, photos, videos, total FROM media_stats WHERE chat_id = ? ORDER BY total DESC LIMIT ?",
+        (chat_id, limit),
+        fetchall=True
+    )
+    
+    return [
+        {
+            "user_id": row[0],
+            "photos": row[1] or 0,
+            "videos": row[2] or 0,
+            "total": row[3] or 0
+        }
+        for row in results
+    ]
+
+
+async def get_inactive_media_users(chat_id: int, inactive_seconds: int) -> list:
+    """Get users who haven't posted media in specified time."""
+    cutoff_time = int(time.time()) - inactive_seconds
+    
+    results = await async_db(
+        "SELECT user_id FROM media_stats WHERE chat_id = ? AND (last_media IS NULL OR last_media < ?)",
+        (chat_id, cutoff_time),
+        fetchall=True
+    )
+    
+    return [row[0] for row in results]
+
+
+async def get_low_media_users(chat_id: int, threshold: int) -> list:
+    """Get users with media count below threshold."""
+    results = await async_db(
+        "SELECT user_id FROM media_stats WHERE chat_id = ? AND total < ?",
+        (chat_id, threshold),
+        fetchall=True
+    )
+    
+    return [row[0] for row in results]
+
+
+async def get_chat_media_stats(chat_id: int) -> dict:
+    """Get overall media statistics for a chat."""
+    # Total photos
+    result = await async_db("SELECT SUM(photos) FROM media_stats WHERE chat_id = ?", (chat_id,), fetchone=True)
+    total_photos = result[0] or 0 if result else 0
+    
+    # Total videos
+    result = await async_db("SELECT SUM(videos) FROM media_stats WHERE chat_id = ?", (chat_id,), fetchone=True)
+    total_videos = result[0] or 0 if result else 0
+    
+    # Total media
+    result = await async_db("SELECT SUM(total) FROM media_stats WHERE chat_id = ?", (chat_id,), fetchone=True)
+    total_media = result[0] or 0 if result else 0
+    
+    # Active users
+    result = await async_db("SELECT COUNT(*) FROM media_stats WHERE chat_id = ? AND total > 0", (chat_id,), fetchone=True)
+    active_users = result[0] or 0 if result else 0
+    
+    return {
+        "total_photos": total_photos,
+        "total_videos": total_videos,
+        "total_media": total_media,
+        "active_users": active_users
+    }
+
+
+# Region blocking functions
+async def add_blocked_country(chat_id: int, countries: list):
+    """Add blocked countries for a chat."""
+    for country in countries:
+        await async_db(
+            "INSERT OR IGNORE INTO region_blocks (chat_id, type, value) VALUES (?, ?, ?)",
+            (chat_id, "country", country.lower())
+        )
+
+
+async def add_blocked_lang(chat_id: int, languages: list):
+    """Add blocked languages for a chat."""
+    for lang in languages:
+        await async_db(
+            "INSERT OR IGNORE INTO region_blocks (chat_id, type, value) VALUES (?, ?, ?)",
+            (chat_id, "language", lang.lower())
+        )
+
+
+async def remove_blocked_country(chat_id: int, countries: list):
+    """Remove blocked countries for a chat."""
+    for country in countries:
+        await async_db(
+            "DELETE FROM region_blocks WHERE chat_id = ? AND type = ? AND value = ?",
+            (chat_id, "country", country.lower())
+        )
+
+
+async def remove_blocked_lang(chat_id: int, languages: list):
+    """Remove blocked languages for a chat."""
+    for lang in languages:
+        await async_db(
+            "DELETE FROM region_blocks WHERE chat_id = ? AND type = ? AND value = ?",
+            (chat_id, "language", lang.lower())
+        )
+
+
+async def get_chat_blocks(chat_id: int) -> dict:
+    """Get blocked countries and languages for a chat."""
+    countries = []
+    languages = []
+    
+    results = await async_db(
+        "SELECT type, value FROM region_blocks WHERE chat_id = ?",
+        (chat_id,),
+        fetchall=True
+    )
+    
+    for row in results:
+        if row[0] == "country":
+            countries.append(row[1])
+        elif row[0] == "language":
+            languages.append(row[1])
+    
+    return {"countries": countries, "languages": languages}
+
+
+async def clear_chat_blocks(chat_id: int):
+    """Clear all blocks for a chat."""
+    await async_db("DELETE FROM region_blocks WHERE chat_id = ?", (chat_id,))
+
+
+# Rules functions
+async def get_rules(chat_id: int) -> str:
+    """Get rules for a chat."""
+    result = await async_db(
+        "SELECT rules FROM chat_rules WHERE chat_id = ?",
+        (chat_id,),
+        fetchone=True
+    )
+    return result[0] if result and result[0] else None
+
+
+async def set_chat_rules(chat_id: int, rules: str):
+    """Set rules for a chat."""
+    await async_db(
+        "INSERT OR REPLACE INTO chat_rules (chat_id, rules) VALUES (?, ?)",
+        (chat_id, rules)
+    )
+
+
+async def delete_rules(chat_id: int) -> bool:
+    """Delete rules for a chat."""
+    result = await async_db("DELETE FROM chat_rules WHERE chat_id = ?", (chat_id,))
+    return result > 0
+
+
+# Trigger functions
+async def add_trigger_db(chat_id: int, trigger: str, response: str, is_global: bool = False, 
+                        is_media: bool = False, file_id: str = None, file_type: str = None, 
+                        use_regex: bool = False):
+    """Add a trigger to the database."""
+    # Check if trigger already exists
+    result = await async_db(
+        "SELECT id FROM triggers WHERE chat_id = ? AND trigger = ?",
+        (0 if is_global else chat_id, trigger.lower())
+    )
+    
+    if result:
+        # Update existing trigger - add response to existing responses
+        trigger_id = result[0]
+        result = await async_db(
+            "SELECT responses FROM triggers WHERE id = ?",
+            (trigger_id,)
+        )
+        
+        if result and result[0]:
+            existing_responses = json.loads(result[0])
+        else:
+            existing_responses = []
+        
+        # Add new response
+        new_response = {
+            "text": response,
+            "is_media": is_media,
+            "file_id": file_id,
+            "file_type": file_type
+        }
+        existing_responses.append(new_response)
+        
+        await async_db(
+            "UPDATE triggers SET responses = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(existing_responses), int(time.time()), trigger_id)
+        )
+    else:
+        # Create new trigger
+        responses = [{
+            "text": response,
+            "is_media": is_media,
+            "file_id": file_id,
+            "file_type": file_type
+        }]
+        
+        await async_db(
+            """INSERT INTO triggers (chat_id, trigger, responses, use_regex, created_at, updated_at) 
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (0 if is_global else chat_id, trigger.lower(), json.dumps(responses), 
+             use_regex, int(time.time()), int(time.time()))
+        )
+
+
+async def remove_trigger_db(chat_id: int, trigger: str, is_global: bool = False) -> bool:
+    """Remove a trigger from the database."""
+    result = await async_db(
+        "DELETE FROM triggers WHERE chat_id = ? AND trigger = ?",
+        (0 if is_global else chat_id, trigger.lower())
+    )
+    return result > 0
+
+
+async def get_chat_triggers_db(chat_id: int, include_global: bool = True) -> list:
+    """Get all triggers for a chat."""
+    triggers = []
+    
+    # Get chat-specific triggers
+    results = await async_db(
+        "SELECT chat_id, trigger, responses, use_regex FROM triggers WHERE chat_id = ?",
+        (chat_id,)
+    )
+    
+    for row in results:
+        triggers.append({
+            "chat_id": row[0],
+            "trigger": row[1],
+            "responses": json.loads(row[2]),
+            "use_regex": bool(row[3])
+        })
+    
+    # Get global triggers if requested
+    if include_global:
+        results = await async_db(
+            "SELECT chat_id, trigger, responses, use_regex FROM triggers WHERE chat_id = 0",
+            ()
+        )
+        
+        for row in results:
+            triggers.append({
+                "chat_id": row[0],
+                "trigger": row[1],
+                "responses": json.loads(row[2]),
+                "use_regex": bool(row[3])
+            })
+    
+    return triggers
+
+
+async def record_trigger_usage_db(chat_id: int, trigger: str):
+    """Record trigger usage statistics."""
+    await async_db(
+        """INSERT OR REPLACE INTO trigger_usage (chat_id, trigger, last_used, use_count) 
+           VALUES (?, ?, ?, 
+                   COALESCE((SELECT use_count FROM trigger_usage WHERE chat_id = ? AND trigger = ?), 0) + 1)""",
+        (chat_id, trigger.lower(), int(time.time()), chat_id, trigger.lower())
+    )
