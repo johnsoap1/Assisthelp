@@ -1,22 +1,239 @@
-file: """"
+"""
 Anonymous Media Repost Module - Makes bot repost user media anonymously
 """
 import asyncio
 import time
-from typing import Dict, Set, Optional
-from datetime import datetime, timedelta
 from collections import defaultdict, deque
-from pyrogram import filters
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
-from pyrogram.errors import (
-    FloodWait, 
-    ChatAdminRequired, 
-    MessageDeleteForbidden,
-    MediaEmpty,
-    BadRequest
-)
-from wbb import app, SUDOERS_SET
-from wbb.core.decorators.errors import capture_err
+from dataclasses import dataclass
+from typing import Dict, Set, Optional
+
+from pyrogram import Client, filters
+from pyrogram.errors import FloodWait, ChatAdminRequired, MessageDeleteForbidden
+from pyrogram.types import Message
+
+# =========================
+# CONFIGURATION
+# =========================
+
+RATE_LIMIT_COUNT = 5
+RATE_LIMIT_WINDOW = 10  # seconds
+
+
+# =========================
+# DATA STORAGE (IN-MEMORY)
+# =========================
+
+enabled_chats: Set[int] = set()
+whitelisted_users: Dict[int, Set[int]] = defaultdict(set)
+rate_limit_tracker: Dict[int, deque] = defaultdict(lambda: deque(maxlen=RATE_LIMIT_COUNT))
+
+
+@dataclass
+class ChatStats:
+    total_processed: int = 0
+    total_deleted: int = 0
+    total_reposted: int = 0
+    total_errors: int = 0
+
+
+stats: Dict[int, ChatStats] = defaultdict(ChatStats)
+
+
+# =========================
+# UTILITY FUNCTIONS
+# =========================
+
+async def safe_delete(message: Message) -> bool:
+    try:
+        await message.delete()
+        return True
+    except (ChatAdminRequired, MessageDeleteForbidden):
+        return False
+    except FloodWait as e:
+        await asyncio.sleep(e.value)
+        return await safe_delete(message)
+    except Exception:
+        return False
+
+
+async def safe_send(client: Client, message: Message) -> bool:
+    try:
+        if message.photo:
+            await client.send_photo(
+                chat_id=message.chat.id,
+                photo=message.photo.file_id,
+                caption=message.caption or "",
+                has_spoiler=message.has_media_spoiler or False
+            )
+
+        elif message.video:
+            await client.send_video(
+                chat_id=message.chat.id,
+                video=message.video.file_id,
+                caption=message.caption or "",
+                has_spoiler=message.has_media_spoiler or False
+            )
+
+        elif message.document:
+            await client.send_document(
+                chat_id=message.chat.id,
+                document=message.document.file_id,
+                caption=message.caption or ""
+            )
+
+        elif message.audio:
+            await client.send_audio(
+                chat_id=message.chat.id,
+                audio=message.audio.file_id,
+                caption=message.caption or ""
+            )
+
+        elif message.voice:
+            await client.send_voice(
+                chat_id=message.chat.id,
+                voice=message.voice.file_id,
+                caption=message.caption or ""
+            )
+
+        else:
+            return False
+
+        return True
+
+    except FloodWait as e:
+        await asyncio.sleep(e.value)
+        return await safe_send(client, message)
+    except Exception:
+        return False
+
+
+def is_rate_limited(chat_id: int) -> bool:
+    now = time.time()
+    timestamps = rate_limit_tracker[chat_id]
+
+    while timestamps and now - timestamps[0] > RATE_LIMIT_WINDOW:
+        timestamps.popleft()
+
+    if len(timestamps) >= RATE_LIMIT_COUNT:
+        return True
+
+    timestamps.append(now)
+    return False
+
+
+def is_media(message: Message) -> bool:
+    return any([
+        message.photo,
+        message.video,
+        message.document,
+        message.audio,
+        message.voice
+    ])
+
+
+# =========================
+# MAIN HANDLER
+# =========================
+
+@Client.on_message(filters.group & ~filters.service, group=100)
+async def anonymous_media_handler(client: Client, message: Message):
+    chat_id = message.chat.id
+
+    if chat_id not in enabled_chats:
+        return
+
+    if not message.from_user:
+        return
+
+    if message.from_user.is_bot:
+        return
+
+    if not is_media(message):
+        return
+
+    if message.from_user.id in whitelisted_users[chat_id]:
+        return
+
+    if is_rate_limited(chat_id):
+        return
+
+    chat_stats = stats[chat_id]
+    chat_stats.total_processed += 1
+
+    deleted = await safe_delete(message)
+    if not deleted:
+        chat_stats.total_errors += 1
+        return
+
+    chat_stats.total_deleted += 1
+
+    reposted = await safe_send(client, message)
+    if reposted:
+        chat_stats.total_reposted += 1
+    else:
+        chat_stats.total_errors += 1
+
+
+# =========================
+# COMMANDS
+# =========================
+
+@Client.on_message(filters.command("anon_enable") & filters.group)
+async def enable_anonymous(_, message: Message):
+    member = await message.chat.get_member(message.from_user.id)
+    if not member.privileges or not member.privileges.can_delete_messages:
+        return await message.reply("You must be admin with delete permission.")
+
+    enabled_chats.add(message.chat.id)
+    await message.reply("Anonymous media mode enabled.")
+
+
+@Client.on_message(filters.command("anon_disable") & filters.group)
+async def disable_anonymous(_, message: Message):
+    member = await message.chat.get_member(message.from_user.id)
+    if not member.privileges or not member.privileges.can_delete_messages:
+        return await message.reply("You must be admin with delete permission.")
+
+    enabled_chats.discard(message.chat.id)
+    await message.reply("Anonymous media mode disabled.")
+
+
+@Client.on_message(filters.command("anon_whitelist") & filters.group)
+async def whitelist_user(_, message: Message):
+    if not message.reply_to_message:
+        return await message.reply("Reply to a user to whitelist them.")
+
+    member = await message.chat.get_member(message.from_user.id)
+    if not member.privileges or not member.privileges.can_delete_messages:
+        return await message.reply("You must be admin.")
+
+    user_id = message.reply_to_message.from_user.id
+    whitelisted_users[message.chat.id].add(user_id)
+
+    await message.reply("User whitelisted.")
+
+
+@Client.on_message(filters.command("anon_stats") & filters.group)
+async def show_stats(_, message: Message):
+    chat_id = message.chat.id
+    chat_stats = stats.get(chat_id)
+
+    if not chat_stats:
+        return await message.reply("No stats available yet.")
+
+    text = (
+        f"Processed: {chat_stats.total_processed}\n"
+        f"Deleted: {chat_stats.total_deleted}\n"
+        f"Reposted: {chat_stats.total_reposted}\n"
+        f"Errors: {chat_stats.total_errors}"
+    )
+
+    await message.reply(text)
+
+
+# =========================
+# MODULE METADATA
+# =========================
 
 __MODULE__ = "Anonymous Media"
 __HELP__ = """
