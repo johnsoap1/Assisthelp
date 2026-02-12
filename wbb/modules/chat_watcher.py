@@ -1,9 +1,8 @@
 """
-
+Chat Watcher Module - Tracks users and leaves blacklisted chats
 """
 from wbb import app
 from wbb.utils.dbfunctions import (
-    add_served_chat,
     add_served_user,
     blacklisted_chats,
 )
@@ -12,17 +11,23 @@ from wbb.utils.filter_groups import chat_watcher_group
 
 @app.on_message(group=chat_watcher_group)
 async def chat_watcher_func(_, message):
-    if message.from_user:
-        user_id = message.from_user.id
-        await add_served_user(user_id)
+    """Track users and leave blacklisted chats."""
+    try:
+        # Track users
+        if message.from_user:
+            user_id = message.from_user.id
+            await add_served_user(user_id)
 
-    chat_id = message.chat.id
-    blacklisted_chats_list = await blacklisted_chats()
+        chat_id = message.chat.id
+        if not chat_id:
+            return
 
-    if not chat_id:
-        return
+        # Check if chat is blacklisted
+        blacklisted_chats_list = await blacklisted_chats()
+        if chat_id in blacklisted_chats_list:
+            # Leave blacklisted chat
+            return await app.leave_chat(chat_id)
 
-    if chat_id in blacklisted_chats_list:
-        return await app.leave_chat(chat_id)
-
-    await add_served_chat(chat_id)
+    except Exception as e:
+        # Log errors but don't crash
+        print(f"[chat_watcher] Error in chat {message.chat.id}: {e}")
