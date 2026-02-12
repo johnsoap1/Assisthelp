@@ -283,4 +283,29 @@ async def goodbye_user(_, update: ChatMemberUpdated):
     goodbye = goodbye.replace("{chat}", chat.title)
     goodbye = goodbye.replace("{count}", str(count))
     
-    await app.send_message(chat.id, goodbye)
+async def send_welcome_message(chat, user_id, delete: bool = False):
+    """Send welcome message to a user (for compatibility with autoapprove)."""
+    welcome = await get_welcome(chat.id)
+    
+    if not welcome:
+        return
+    
+    try:
+        user = await app.get_users(user_id)
+        chat_info = await app.get_chat(chat.id)
+        count = await app.get_chat_members_count(chat.id)
+        
+        # Replace variables
+        welcome_msg = welcome.replace("{mention}", user.mention)
+        welcome_msg = welcome_msg.replace("{name}", user.first_name or "")
+        welcome_msg = welcome_msg.replace("{chat}", chat_info.title)
+        welcome_msg = welcome_msg.replace("{count}", str(count))
+        
+        await app.send_message(chat.id, welcome_msg)
+    except Exception as e:
+        print(f"Error sending welcome message: {e}")
+
+
+async def handle_new_member(member, chat):
+    """Handle new member join (for compatibility with autoapprove)."""
+    await send_welcome_message(chat, member.id)
