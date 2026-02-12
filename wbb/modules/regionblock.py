@@ -7,8 +7,6 @@ Admins can block specific countries and language scripts
 from wbb import app, SUDOERS, SUDOERS_SET
 import logging
 import re
-from wbb.core.storage import db
-
 from wbb.utils.dbfunctions import (
     add_blocked_country, add_blocked_lang, remove_blocked_country,
     remove_blocked_lang, get_chat_blocks, clear_chat_blocks
@@ -135,76 +133,6 @@ COUNTRY_CODES = {
     "yemen": ["YE", "اليمن", "Yemen"],
     "somalia": ["SO", "Somalia"],
 }
-
-
-class RegionBlockerDB:
-    def __init__(self):
-        self.col = db.region_blocker
-
-    async def add_blocked_country(self, chat_id: int, countries: list):
-        """Add blocked countries to chat"""
-        countries_lower = [c.lower().strip() for c in countries]
-        await self.col.update_one(
-            {"_id": chat_id},
-            {
-                "$addToSet": {
-                    "blocked_countries": {"$each": countries_lower}
-                }
-            },
-            upsert=True,
-        )
-
-    async def add_blocked_lang(self, chat_id: int, languages: list):
-        """Add blocked language scripts to chat"""
-        languages_lower = [l.lower().strip() for l in languages]
-        await self.col.update_one(
-            {"_id": chat_id},
-            {
-                "$addToSet": {
-                    "blocked_languages": {"$each": languages_lower}
-                }
-            },
-            upsert=True,
-        )
-
-    async def remove_blocked_country(self, chat_id: int, countries: list):
-        """Remove blocked countries from chat"""
-        countries_lower = [c.lower().strip() for c in countries]
-        await self.col.update_one(
-            {"_id": chat_id},
-            {
-                "$pullAll": {
-                    "blocked_countries": countries_lower
-                }
-            },
-        )
-
-    async def remove_blocked_lang(self, chat_id: int, languages: list):
-        """Remove blocked languages from chat"""
-        languages_lower = [l.lower().strip() for l in languages]
-        await self.col.update_one(
-            {"_id": chat_id},
-            {
-                "$pullAll": {
-                    "blocked_languages": languages_lower
-                }
-            },
-        )
-
-    async def get_chat_blocks(self, chat_id: int):
-        """Get blocked countries and languages for chat"""
-        data = await self.col.find_one({"_id": chat_id})
-        return {
-            "countries": data.get("blocked_countries", []) if data else [],
-            "languages": data.get("blocked_languages", []) if data else []
-        }
-
-    async def clear_blocks(self, chat_id: int):
-        """Clear all blocks for chat"""
-        await self.col.delete_one({"_id": chat_id})
-
-
-blocker_db = RegionBlockerDB()
 
 
 async def is_admin_or_sudo(client: Client, user_id: int, chat_id: int) -> bool:
