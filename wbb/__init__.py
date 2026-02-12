@@ -1,45 +1,39 @@
+# wbb/__init__.py
+"""
+William Butcher Bot - Main initialization module.
+"""
 import asyncio
 import os
 import time
-from inspect import getfullargspec
-from os import path, remove
 from pathlib import Path
-
 from aiohttp import ClientSession
 from pyrogram import Client, filters
-from pyrogram.types import Message
-from pyromod import listen
 from Python_ARQ import ARQ
 from telegraph import Telegraph
 
-from wbb.core.storage import init_storage, db
-
-# Load config
-is_config = path.exists("config.py")
+# Load config first
+is_config = os.path.exists("config.py")
 if is_config:
     from config import *
 else:
     from sample_config import *
 
-# Optional DeepL API key for translation
-DEEPL_API = os.environ.get("DEEPL_API")
-
-# Ensure sessions folder exists
+# Ensure required directories exist
 Path("sessions").mkdir(exist_ok=True)
 
-# Globals
+# Initialize globals
 MOD_LOAD = []
 MOD_NOLOAD = []
-SUDOERS_SET = set()  # actual user IDs
+SUDOERS_SET = set()
+bot_start_time = time.time()
 
+# Define SUDOERS filter
 def sudo_filter(_, __, message):
     return message.from_user and message.from_user.id in SUDOERS_SET
 
 SUDOERS = filters.create(sudo_filter)
-bot_start_time = time.time()
 
-
-# Logging helper
+# Logging class
 class Log:
     def __init__(self, save_to_file=False, file_name="wbb.log"):
         self.save_to_file = save_to_file
@@ -56,21 +50,37 @@ class Log:
         if self.save_to_file:
             with open(self.file_name, "a") as f:
                 f.write(f"[WARNING]({time.ctime(time.time())}): {msg}\n")
-
+    
+    def error(self, msg):
+        print(f"[ERROR]: {msg}")
+        if self.save_to_file:
+            with open(self.file_name, "a") as f:
+                f.write(f"[ERROR]({time.ctime(time.time())}): {msg}\n")
 
 log = Log(True, "bot.log")
 
-# Helper to load sudoers
+# Initialize clients and sessions (will be set in startup)
+app = None
+aiohttpsession = None
+arq = None
+telegraph = None
+
+# Bot info (will be set in startup)
+BOT_ID = None
+BOT_NAME = None
+BOT_USERNAME = None
+BOT_MENTION = None
+BOT_DC_ID = None
+LOG_GROUP_ID = None
+
+# Load sudoers from database
 async def load_sudoers():
-    global SUDOERS, SUDOERS_SET
-    log.info("Loading sudoers from DB")
-    
-    # SQLite version - we need to create the table first
+    """Load sudo users from database."""
+    global SUDOERS_SET
     import sqlite3
-    from pathlib import Path
     import json
     
-    conn = sqlite3.connect(Path("wbb.sqlite"))
+    conn = sqlite3.connect("wbb.sqlite")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS sudoers (
             id INTEGER PRIMARY KEY,
@@ -91,12 +101,13 @@ async def load_sudoers():
     else:
         sudoers_list = []
     
-    # Add default sudoers from config
-    for user_id in SUDO_USERS_ID:
-        if user_id not in sudoers_list:
-            sudoers_list.append(user_id)
+    # Add from config
+    if 'SUDO_USERS_ID' in globals():
+        for user_id in SUDO_USERS_ID:
+            if user_id not in sudoers_list:
+                sudoers_list.append(user_id)
     
-    # Save updated sudoers list
+    # Save updated list
     sudoers_data = {"sudoers": sudoers_list}
     conn.execute("""
         INSERT OR REPLACE INTO sudoers (sudo, data)
@@ -110,8 +121,71 @@ async def load_sudoers():
     log.info(f"Loaded SUDOERS: {SUDOERS_SET}")
 
 
-# Async helper to edit or reply safely
-async def eor(msg: Message, **kwargs):
+# Startup function
+async def startup():
+    """Initialize and start the bot."""
+    global app, aiohttpsession, arq, telegraph
+    global BOT_ID, BOT_NAME, BOT_USERNAME, BOT_MENTION, BOT_DC_ID, LOG_GROUP_ID
+    
+    # Initialize storage
+    from wbb.core.storage import init_storage
+    await init_storage()
+    
+    # Load sudoers
+    await load_sudoers()
+    
+    # Get config values
+    BOT_TOKEN = globals().get('BOT_TOKEN')
+    ARQ_API_URL = globals().get('ARQ_API_URL', 'https://arq.hamker.in')
+    ARQ_API_KEY = globals().get('ARQ_API_KEY', '')
+    LOG_GROUP_ID = globals().get('LOG_GROUP_ID')
+    
+    # Initialize Pyrogram client
+    app = Client(
+        "assistbot",
+        api_id=6,  # Default for bots
+        api_hash="eb06d4abfb49dc3eeb1aeb98ae0f581e",  # Default for bots
+        bot_token=BOT_TOKEN
+    )
+    
+    # Initialize HTTP session and services
+    aiohttpsession = ClientSession()
+    arq = ARQ(ARQ_API_URL, ARQ_API_KEY, aiohttpsession)
+    
+    log.info("Starting bot...")
+    await app.start()
+    
+    # Get bot info
+    x = await app.get_me()
+    BOT_ID = x.id
+    BOT_NAME = x.first_name + (x.last_name or "")
+    BOT_USERNAME = x.username
+    BOT_MENTION = x.mention
+    BOT_DC_ID = x.dc_id
+    
+    # Initialize Telegraph
+    telegraph = Telegraph(domain="graph.org")
+    telegraph.create_account(short_name=BOT_USERNAME)
+    
+    log.info(f"Bot started as @{BOT_USERNAME}")
+
+
+# Shutdown function
+async def shutdown():
+    """Gracefully shutdown the bot."""
+    log.info("Stopping clients...")
+    if aiohttpsession:
+        await aiohttpsession.close()
+    if app:
+        await app.stop()
+    log.info("Shutdown complete.")
+
+
+# Helper function for edit or reply
+from inspect import getfullargspec
+
+async def eor(msg, **kwargs):
+    """Edit or reply to a message."""
     func = (
         (msg.edit_text if getattr(msg.from_user, "is_self", False) else msg.reply)
         if msg.from_user
@@ -119,57 +193,6 @@ async def eor(msg: Message, **kwargs):
     )
     spec = getfullargspec(func.__wrapped__).args
     return await func(**{k: v for k, v in kwargs.items() if k in spec})
-
-
-# Startup function
-async def startup():
-    global app, aiohttpsession, arq, telegraph
-
-    # Initialize SQLite storage
-    await init_storage()
-
-    await load_sudoers()
-
-    # Initialize Pyrogram client with default Telegram API credentials for bot accounts
-    app = Client(
-        "assistbot",
-        api_id=6,  # Default Telegram API ID for bot accounts
-        api_hash="eb06d4abfb49dc3eeb1aeb98ae0f581e",  # Default Telegram API hash for bot accounts
-        bot_token=BOT_TOKEN
-    )
-
-    aiohttpsession = ClientSession()
-    arq = ARQ(ARQ_API_URL, ARQ_API_KEY, aiohttpsession)
-
-    log.info("Starting bot...")
-    await app.start()
-
-    # Bot profile
-    log.info("Fetching bot profile info...")
-    x = await app.get_me()
-
-    global BOT_ID, BOT_NAME, BOT_USERNAME, BOT_MENTION, BOT_DC_ID
-
-    BOT_ID = x.id
-    BOT_NAME = x.first_name + (x.last_name or "")
-    BOT_USERNAME = x.username
-    BOT_MENTION = x.mention
-    BOT_DC_ID = x.dc_id
-
-    # Telegraph
-    log.info("Initializing Telegraph...")
-    telegraph = Telegraph(domain="graph.org")
-    telegraph.create_account(short_name=BOT_USERNAME)
-
-    log.info("Bot startup complete (userbot disabled).")
-
-
-# Graceful shutdown
-async def shutdown():
-    log.info("Stopping clients...")
-    await app.stop()
-    await aiohttpsession.close()
-    log.info("Shutdown complete.")
 
 
 # Run startup

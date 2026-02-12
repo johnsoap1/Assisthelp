@@ -1,64 +1,21 @@
-# New file
-
-from pyrogram import filters
-from pyrogram.enums import ChatType, ParseMode
-from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
-
-from wbb import BOT_USERNAME, app
+# wbb/utils/constants.py
 
 MARKDOWN = """
-Read the below text carefully to find out how formatting works!
+**Markdown Formatting**
 
-<u>Supported Fillings:</u>
+You can use markdown in your messages:
 
-<code>{name}</code> - This will mention the user with their name.
-<code>{chat}</code> - This will fill with the current chat name.
+- `*bold*` for **bold**
+- `_italic_` for *italic*
+- `__underline__` for __underline__
+- `~~strike~~` for ~~strikethrough~~
+- `||spoiler||` for spoiler text
+- `` `code` `` for `inline code`
+- ``` for code blocks
 
-NOTE: Fillings only works in greetings module.
+**Links:**
+- `[text](url)` for inline links
 
-
-<u>Supported formatting:</u>
-
-<code>**Bold**</code> : This will show as <b>bold</b> text.
-<code>~~strike~~</code>: This will show as <strike>strike</strike> text.
-<code>__italic__</code>: This will show as <i>italic</i> text.
-<code>--underline--</code>: This will show as <u>underline</u> text.
-<code>`code words`</code>: This will show as <code>code</code> text.
-<code>||spoiler||</code>: This will show as <spoiler>Spoiler</spoiler> text.
-<code>[hyperlink](google.com)</code>: This will create a <a href='https://www.google.com'>hyperlink</a> text.
-<b>Note:</b> You can use both markdown & html tags.
-
-
-<u>Button formatting:</u>
-
--> text ~ [button text, button link]
-
-
-<u>Example:</u>
-
-<b>example</b> <i>button with markdown</i> <code>formatting</code> ~ [button text, https://google.com]
+**Mentions:**
+- `[text](tg://user?id=123456)` for user mentions
 """
-
-
-@app.on_message(filters.command("markdownhelp"))
-async def mkdwnhelp(_, m: Message):
-    keyb = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    text="Click Here!",
-                    url=f"http://t.me/{BOT_USERNAME}?start=mkdwn_help",
-                )
-            ]
-        ]
-    )
-    if m.chat.type != ChatType.PRIVATE:
-        await m.reply(
-            "Click on the below button to get markdown usage syntax in pm!",
-            reply_markup=keyb,
-        )
-    else:
-        await m.reply(
-            MARKDOWN, parse_mode=ParseMode.HTML, disable_web_page_preview=True
-        )
-    return

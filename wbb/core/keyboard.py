@@ -1,35 +1,36 @@
-"""
+# wbb/core/keyboard.py
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-"""
-from pykeyboard import InlineKeyboard
-from pyrogram.types import InlineKeyboardButton as Ikb
-
-from wbb.utils.functions import get_urls_from_text as is_url
-
-
-def keyboard(buttons_list, row_width: int = 2):
+def ikb(rows=None, row_width=2):
     """
-    Buttons builder, pass buttons in a list and it will
-    return pyrogram.types.IKB object
-    Ex: keyboard([["click here", "https://google.com"]])
-    if theres, a url, it will make url button, else callback button
+    rows: list of dicts for buttons
+    Example: [{"text": "Button", "url": "https://..."}]
     """
-    buttons = InlineKeyboard(row_width=row_width)
-    data = [
-        (
-            Ikb(text=str(i[0]), callback_data=str(i[1]))
-            if not is_url(i[1])
-            else Ikb(text=str(i[0]), url=str(i[1]))
-        )
-        for i in buttons_list
-    ]
-    buttons.add(*data)
-    return buttons
-
-
-def ikb(data: dict, row_width: int = 2):
-    """
-    Converts a dict to pyrogram buttons
-    Ex: dict_to_keyboard({"click here": "this is callback data"})
-    """
-    return keyboard(data.items(), row_width=row_width)
+    if not rows:
+        return None
+    
+    lines = []
+    for row in rows:
+        if isinstance(row, list):
+            line = []
+            for button in row:
+                btn = InlineKeyboardButton(
+                    button.get("text", ""),
+                    callback_data=button.get("callback_data"),
+                    url=button.get("url"),
+                    switch_inline_query=button.get("switch_inline_query"),
+                    switch_inline_query_current_chat=button.get("switch_inline_query_current_chat")
+                )
+                line.append(btn)
+            lines.append(line)
+        else:
+            btn = InlineKeyboardButton(
+                row.get("text", ""),
+                callback_data=row.get("callback_data"),
+                url=row.get("url"),
+                switch_inline_query=row.get("switch_inline_query"),
+                switch_inline_query_current_chat=row.get("switch_inline_query_current_chat")
+            )
+            lines.append([btn])
+    
+    return InlineKeyboardMarkup(lines)

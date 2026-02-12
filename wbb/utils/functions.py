@@ -1,60 +1,33 @@
-"""
-MIT License
+# wbb/utils/functions.py
+import re
 
-Copyright (c) 2024 TheHamkerCat
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-"""
-
-import asyncio
-
-from asyncio import gather
-from datetime import datetime, timedelta
-from io import BytesIO
-from math import atan2, cos, radians, sin, sqrt
-from os import execvp
-from random import randint
-from re import findall, search
-from re import sub as re_sub
-from sys import executable
-from typing import Dict
-
-import aiofiles
-import speedtest
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
-from pyrogram import errors
-from pyrogram.enums import MessageEntityType
-from pyrogram.types import Message
-
-from wbb import aiohttpsession as aiosession
-from wbb.utils.dbfunctions import set_restart_stage
-from wbb.utils.http import get, post
-
-
-async def restart(m: Message):
-    if m:
-        await set_restart_stage(m.chat.id, m.id)
-    execvp(executable, [executable, "-m", "wbb"])
-
-
-def generate_captcha():
-    # Generate one letter
+def extract_text_and_keyb(ikb_func, text):
+    """Extract inline keyboard buttons from text"""
+    keyboard = []
+    
+    # Pattern: [Button Text, url/callback_data]
+    pattern = r'\[([^\[\]]+)\s*,\s*([^\[\]]+)\]'
+    
+    matches = re.finditer(pattern, text)
+    
+    for match in matches:
+        button_text = match.group(1).strip()
+        button_data = match.group(2).strip()
+        
+        button = {}
+        button['text'] = button_text
+        
+        if button_data.startswith('http'):
+            button['url'] = button_data
+        else:
+            button['callback_data'] = button_data
+        
+        keyboard.append([button])
+        text = text.replace(match.group(0), '')
+    
+    if keyboard:
+        return text.strip(), ikb_func(keyboard)
+    return text.strip(), None
     def gen_letter():
         return chr(randint(65, 90))
 

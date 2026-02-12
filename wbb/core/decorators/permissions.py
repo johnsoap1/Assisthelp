@@ -1,8 +1,11 @@
+# wbb/core/decorators/permissions.py
+"""
+Permission checking decorators for bot commands.
+"""
 from functools import wraps
 from traceback import format_exc as err
-
 from pyrogram.errors import ChatWriteForbidden
-from pyrogram.types import Message, ChatMember
+from pyrogram.types import Message
 
 
 async def member_permissions(chat_id: int, user_id: int):
@@ -21,12 +24,12 @@ async def member_permissions(chat_id: int, user_id: int):
                 "can_invite_users", "can_pin_messages",
                 "can_manage_video_chats"
             ]
-            
+        
         # For group/supergroup/channel
         member = await app.get_chat_member(chat_id, user_id)
         if not member or not hasattr(member, 'privileges') or not member.privileges:
             return []
-            
+        
         priv = member.privileges
         if priv.can_post_messages:
             perms.append("can_post_messages")
@@ -47,15 +50,15 @@ async def member_permissions(chat_id: int, user_id: int):
         if priv.can_manage_video_chats:
             perms.append("can_manage_video_chats")
     except Exception as e:
-        # Log the error if needed, but don't fail
         print(f"[PERMISSIONS] Error in member_permissions: {e}")
     
     return perms
 
 
 async def authorised(func, subFunc2, client, message, *args, **kwargs):
-    from wbb import app, log  # ✅ moved here (lazy import)
-
+    """Execute function if user is authorized."""
+    from wbb import app, log
+    
     chatID = message.chat.id
     try:
         await func(client, message, *args, **kwargs)
@@ -72,8 +75,9 @@ async def authorised(func, subFunc2, client, message, *args, **kwargs):
 
 
 async def unauthorised(message: Message, permission, subFunc2):
-    from wbb import app  # ✅ moved here (lazy import)
-
+    """Handle unauthorized access."""
+    from wbb import app
+    
     chatID = message.chat.id
     text = (
         "You don't have the required permission to perform this action."
@@ -87,12 +91,14 @@ async def unauthorised(message: Message, permission, subFunc2):
 
 
 def adminsOnly(permission):
+    """Decorator to restrict command to admins with specific permission."""
     def subFunc(func):
         @wraps(func)
         async def subFunc2(client, message: Message, *args, **kwargs):
-            from wbb import SUDOERS  # ✅ moved here (lazy import)
-
+            from wbb import SUDOERS_SET
+            
             chatID = message.chat.id
+            
             if not message.from_user:
                 # For anonymous admins
                 if (
@@ -108,15 +114,18 @@ def adminsOnly(permission):
                         **kwargs,
                     )
                 return await unauthorised(message, permission, subFunc2)
+            
             # For admins and sudo users
             userID = message.from_user.id
             permissions = await member_permissions(chatID, userID)
-            if userID not in SUDOERS and permission not in permissions:
+            
+            if userID not in SUDOERS_SET and permission not in permissions:
                 return await unauthorised(message, permission, subFunc2)
+            
             return await authorised(
                 func, subFunc2, client, message, *args, **kwargs
             )
-
+        
         return subFunc2
-
+    
     return subFunc
