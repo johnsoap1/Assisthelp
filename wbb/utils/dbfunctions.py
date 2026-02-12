@@ -258,6 +258,23 @@ def init_tables():
         )
     """)
     
+    # Music cache table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS music_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            query TEXT UNIQUE,
+            title TEXT,
+            performer TEXT,
+            duration INTEGER,
+            file_id TEXT,
+            thumb_file_id TEXT,
+            storage_msg_id INTEGER,
+            created_at INTEGER,
+            last_accessed INTEGER,
+            access_count INTEGER DEFAULT 0
+        )
+    """)
+    
     conn.commit()
     conn.close()
 
@@ -1904,6 +1921,134 @@ async def get_chat_blocks(chat_id: int) -> dict:
 async def clear_chat_blocks(chat_id: int):
     """Clear all blocks for a chat."""
     await async_db("DELETE FROM region_blocks WHERE chat_id = ?", (chat_id,))
+
+
+# Music cache functions
+async def get_cached_song(query: str, exact_only: bool = True) -> Optional[dict]:
+    """Get cached song by query with access tracking."""
+    query_norm = query.lower().strip()
+    
+    result = await async_db(
+        "SELECT * FROM music_cache WHERE query = ?",
+        (query_norm,),
+        fetchone=True
+    )
+    
+    if result:
+        # Update access tracking
+        await async_db(
+            "UPDATE music_cache SET last_accessed = ?, access_count = access_count + 1 WHERE id = ?",
+            (int(time.time()), result[0])
+        )
+        
+        return {
+            "query": result[1],
+            "title": result[2],
+            "performer": result[3],
+            "duration": result[4],
+            "file_id": result[5],
+            "thumb_file_id": result[6],
+            "storage_msg_id": result[7],
+            "created_at": result[8],
+            "last_accessed": result[9],
+            "access_count": result[10]
+        }
+    
+    if exact_only:
+        return None
+    
+    # Fuzzy match via SQLite LIKE
+    results = await async_db(
+        "SELECT * FROM music_cache WHERE query LIKE ? ORDER BY access_count DESC LIMIT 5",
+        (f"%{query_norm}%",),
+        fetchall=True
+    )
+    
+    # Simple fuzzy matching - return first reasonable match
+    for row in results:
+        if row[1] and query_norm in row[1].lower():
+            # Update access tracking
+            await async_db(
+                "UPDATE music_cache SET last_accessed = ?, access_count = access_count + 1 WHERE id = ?",
+                (int(time.time()), row[0])
+            )
+            
+            return {
+                "query": row[1],
+                "title": row[2],
+                "performer": row[3],
+                "duration": row[4],
+                "file_id": row[5],
+                "thumb_file_id": row[6],
+                "storage_msg_id": row[7],
+                "created_at": row[8],
+                "last_accessed": row[9],
+                "access_count": row[10]
+            }
+    
+    return None
+
+
+async def save_cached_song(query: str, title: str, performer: str, duration: int, 
+                          file_id: str, thumb_file_id: Optional[str], storage_msg_id: int):
+    """Save song to cache."""
+    query_norm = query.lower().strip()
+    now = int(time.time())
+    
+    await async_db(
+        """INSERT OR REPLACE INTO music_cache 
+           (query, title, performer, duration, file_id, thumb_file_id, storage_msg_id, created_at, last_accessed, access_count) 
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (query_norm, title, performer, duration, file_id, thumb_file_id, storage_msg_id, now, now, 1)
+    )
+
+
+async def delete_cached_song(query: str) -> bool:
+    """Delete cached song by exact query match."""
+    query_norm = query.lower().strip()
+    
+    result = await async_db("DELETE FROM music_cache WHERE query = ?", (query_norm,))
+    return result > 0
+
+
+async def get_music_cache_count() -> int:
+    """Get total number of cached songs."""
+    result = await async_db("SELECT COUNT(*) FROM music_cache", fetchone=True)
+    return result[0] if result else 0
+
+
+async def get_recent_cached_songs(limit: int = 15) -> list:
+    """Get recent cached songs sorted by last access."""
+    results = await async_db(
+        "SELECT * FROM music_cache ORDER BY last_accessed DESC LIMIT ?",
+        (limit,),
+        fetchall=True
+    )
+    
+    return [
+        {
+            "query": row[1],
+            "title": row[2],
+            "performer": row[3],
+            "duration": row[4],
+            "file_id": row[5],
+            "thumb_file_id": row[6],
+            "storage_msg_id": row[7],
+            "created_at": row[8],
+            "last_accessed": row[9],
+            "access_count": row[10]
+        }
+        for row in results
+    ]
+
+
+async def purge_music_cache(query_pattern: str) -> int:
+    """Delete cached songs matching pattern."""
+    result = await async_db(
+        "DELETE FROM music_cache WHERE query LIKE ?",
+        (f"%{query_pattern}%",)
+    )
+    return result
 
 
 # Rules functions

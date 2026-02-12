@@ -27,7 +27,11 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 # Bot imports
-from wbb import app, arq, SUDOERS
+from wbb import app, SUDOERS, arq
+from wbb.utils.dbfunctions import (
+    get_cached_song, save_cached_song, delete_cached_song,
+    get_music_cache_count, get_recent_cached_songs, purge_music_cache
+)
 from wbb.core.storage import db
 from pyrogram import filters
 from pyrogram.types import InlineQuery, InlineQueryResultAudio, Message
@@ -111,8 +115,6 @@ GLOBAL_SEM = asyncio.Semaphore(10)  # Increased from 6 to 10
 DOWNLOAD_TIMEOUT = 180  # Reduced from 300 to 180 (3 minutes)
 
 # ==================== DATABASE ====================
-
-cache_col = db.music_cache
 
 # ==================== USER AGENTS ====================
 
@@ -211,40 +213,8 @@ async def get_cached_song(query: str, exact_only: bool = True) -> Optional[Dict]
     """Get cached song by query with access tracking (SQLite)."""
     query_norm = normalize_query(query)
 
-    data = await cache_col.find_one({"query": query_norm})
-    if data:
-        await cache_col.update_one(
-            {"query": query_norm},
-            {
-                "$set": {"last_accessed": int(time.time())},
-                "$inc": {"access_count": 1},
-            },
-        )
-        return data
-
-    if exact_only:
-        return None
-
-    # Fuzzy match via Python difflib over in-memory results
-    cursor = await cache_col.find({})
-    all_data = await cursor.to_list(None)
-    from difflib import get_close_matches
-
-    all_queries = [d.get("query", "") for d in all_data]
-    matches = get_close_matches(query_norm, all_queries, n=1, cutoff=0.85)
-    if matches:
-        data = await cache_col.find_one({"query": matches[0]})
-        if data:
-            await cache_col.update_one(
-                {"query": matches[0]},
-                {
-                    "$set": {"last_accessed": int(time.time())},
-                    "$inc": {"access_count": 1},
-                },
-            )
-            return data
-
-    return None
+    data = await get_cached_song(query_norm, exact_only)
+    return data
 
 async def save_cached_song(
     query: str,
@@ -259,29 +229,14 @@ async def save_cached_song(
     normalized_query = normalize_query(query)
     now = int(time.time())
 
-    await cache_col.update_one(
-        {"query": normalized_query},
-        {
-            "$set": {
-                "query": normalized_query,
-                "title": title,
-                "performer": performer,
-                "duration": duration,
-                "file_id": file_id,
-                "thumb_file_id": thumb_file_id,
-                "storage_msg_id": storage_msg_id,
-                "created_at": now,
-                "last_accessed": now,
-                "access_count": 1,
-            }
-        },
-        upsert=True,
+    await save_cached_song(
+        normalized_query, title, performer, duration, file_id, thumb_file_id, storage_msg_id
     )
     print(f"[CACHE] Saved: '{normalized_query}' -> file_id: {file_id[:20]}...")
 
 async def delete_cached_song(query: str):
     """Delete cached song by exact query match."""
-    await cache_col.delete_one({"query": normalize_query(query)})
+    await delete_cached_song(query)
 
 # ==================== YT-DLP OPTIONS ====================
 
@@ -918,13 +873,13 @@ sudo_only = filters.create(sudo_filter, "SudoFilter")
 async def cache_info_handler(_, m: Message):
     """Show cache statistics."""
     try:
-        audio_count = await cache_col.count_documents({})
-        latest_audio = await cache_col.find().sort("created_at", -1).limit(1).to_list(1)
+        audio_count = await get_music_cache_count()
+        latest_songs = await get_recent_cached_songs(1)
         
         text = "📊 **Cache Statistics**\n\n"
         text += f"**🎵 Songs Cached:** {audio_count}\n"
-        if latest_audio:
-            text += f"**Last Added:** {latest_audio[0]['title']}\n"
+        if latest_songs:
+            text += f"**Last Added:** {latest_songs[0]['title']}\n"
         await m.reply_text(text)
     except Exception as e:
         error_msg = str(e)[:200]
@@ -939,15 +894,15 @@ async def cache_list_handler(_, m: Message):
     
     try:
         # Get top 15 by last access
-        data = cache_col.find().sort("last_accessed", -1).limit(15)
+        songs = await get_recent_cached_songs(15)
         text = "📋 **Recent Cached Songs**\n"
         text += "_Sorted by last access_\n\n"
         
         i = 1
-        async for d in data:
-            access_count = d.get("access_count", 0)
-            last_access = d.get("last_accessed", d.get("created_at"))
-            time_ago = datetime.datetime.utcnow() - last_access
+        for song in songs:
+            access_count = song.get("access_count", 0)
+            last_access = song.get("last_accessed", song.get("created_at"))
+            time_ago = datetime.datetime.utcnow() - datetime.datetime.utcfromtimestamp(last_access)
             
             # Format time ago
             if time_ago.days > 0:
@@ -957,9 +912,9 @@ async def cache_list_handler(_, m: Message):
             else:
                 time_str = f"{time_ago.seconds // 60}m ago"
             
-            text += f"{i}. **{d['title']}** - {d.get('performer', 'Unknown')}\n"
+            text += f"{i}. **{song['title']}** - {song.get('performer', 'Unknown')}\n"
             text += f"   📊 {access_count} plays • 🕐 {time_str}\n"
-            text += f"   `{d['query']}`\n\n"
+            text += f"   `{song['query']}`\n\n"
             i += 1
         
         if i == 1:
@@ -980,8 +935,8 @@ async def purge_handler(_, m: Message):
     
     try:
         query = m.text.split(None, 1)[1].strip().lower()
-        result = await cache_col.delete_many({"query": {"$regex": query, "$options": "i"}})
-        await m.reply_text(f"🗑️ Deleted {result.deleted_count} entries matching `{query}`")
+        deleted_count = await purge_music_cache(query)
+        await m.reply_text(f"🗑️ Deleted {deleted_count} entries matching `{query}`")
     except Exception as e:
         await m.reply_text(f"❌ Error: {str(e)}")
 
