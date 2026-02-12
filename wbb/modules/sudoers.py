@@ -63,7 +63,7 @@ __HELP__ = """
 # Helper function to check if user is sudo
 def is_sudo(user_id: int) -> bool:
     """Check if a user is in the SUDOERS list."""
-    return user_id in SUDOERS_SET or user_id in SUDOERS
+    return user_id in SUDOERS_SET
 
 
 # Stats Module

@@ -181,7 +181,7 @@ def normalize_song_query(q: str) -> str:
 
 def is_sudo(user_id: int) -> bool:
     """Check if user is sudo."""
-    return user_id in SUDOERS
+    return user_id in SUDOERS_SET
 
 def is_valid_audio(path: Path) -> bool:
     """Validate audio file integrity (quick check)."""

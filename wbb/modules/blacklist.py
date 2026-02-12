@@ -299,7 +299,7 @@ async def blacklist_filter_handler(_, message):
         return
     
     # Skip sudo users
-    if user.id in SUDOERS:
+    if user.id in SUDOERS_SET:
         return
     
     settings = await get_blacklist_settings(chat_id)
