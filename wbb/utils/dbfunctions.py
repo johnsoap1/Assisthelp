@@ -122,6 +122,17 @@ def init_tables():
         )
     """)
     
+    # Blacklist table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS blacklist (
+            chat_id INTEGER,
+            word TEXT,
+            settings TEXT,
+            stats TEXT,
+            PRIMARY KEY (chat_id, word)
+        )
+    """)
+    
     # Antiservice table
     conn.execute("""
         CREATE TABLE IF NOT EXISTS antiservice (
@@ -138,16 +149,6 @@ def init_tables():
             date TEXT,
             couple_data TEXT,
             PRIMARY KEY (chat_id, date)
-        )
-    """)
-    
-    # Filters table
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS filters (
-            chat_id INTEGER,
-            name TEXT,
-            filter_data TEXT,
-            PRIMARY KEY (chat_id, name)
         )
     """)
     
@@ -275,13 +276,50 @@ def init_tables():
         )
     """)
     
+    # Warnings table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS warnings (
+            chat_id INTEGER,
+            user_id TEXT,
+            warns INTEGER DEFAULT 0,
+            PRIMARY KEY (chat_id, user_id)
+        )
+    """)
+    
+    # Autoapprove table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS autoapprove (
+            chat_id INTEGER PRIMARY KEY,
+            mode TEXT,
+            settings TEXT,
+            stats TEXT,
+            pending_users TEXT
+        )
+    """)
+    
+    # Antiflood table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS antiflood (
+            chat_id INTEGER PRIMARY KEY,
+            limit_count INTEGER,
+            limit_time INTEGER,
+            action TEXT
+        )
+    """)
+    
+    # Rules table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS rules (
+            chat_id INTEGER PRIMARY KEY,
+            rules TEXT
+        )
+    """)
+
     conn.commit()
     conn.close()
 
 # Initialize tables on import
 init_tables()
-
-# ==================== WARN FUNCTIONS ====================
 
 @async_db
 def add_warn(chat_id: int, user_id: str, warn_data: dict):
@@ -1625,7 +1663,7 @@ def get_filters_names(chat_id: int) -> list:
     """Get list of filter names for a chat."""
     conn = get_db()
     cursor = conn.execute(
-        "SELECT name FROM filters WHERE chat_id = ?",
+        "SELECT keyword FROM filters WHERE chat_id = ?",
         (chat_id,)
     )
     results = cursor.fetchall()
