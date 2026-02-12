@@ -312,6 +312,11 @@ async def int_to_alpha(user_id: int) -> str:
     """Convert user ID to string (for compatibility)."""
     return str(user_id)
 
+
+async def alpha_to_int(alpha_str: str) -> int:
+    """Convert alpha string back to user ID (for compatibility)."""
+    return int(alpha_str)
+
 # ==================== FILTER FUNCTIONS ====================
 
 @async_db
