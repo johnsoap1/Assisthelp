@@ -1,79 +1,15 @@
 """
 Enhanced Database Functions for William Butcher Bot
 
-Provides abstraction layer for database operations with improved structure,
+Provides abstraction layer for MongoDB operations with improved structure,
 better error handling, and more efficient queries.
 """
 import codecs
-import json
 import pickle
-import sqlite3
-from pathlib import Path
 from string import ascii_lowercase
-from typing import Any, Dict, List, Optional, Union
+from typing import Dict, List, Union, Optional
 
-# Initialize SQLite database
-DB_PATH = Path("wbb.sqlite")
-
-def get_db():
-    """Get SQLite database connection."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row  # Enable column access by name
-    return conn
-
-def init_database():
-    """Initialize database tables."""
-    conn = get_db()
-    
-    # Warnings table
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS warnings (
-            chat_id INTEGER,
-            user_id TEXT,
-            warns INTEGER DEFAULT 0,
-            PRIMARY KEY (chat_id, user_id)
-        )
-    """)
-    
-    # Blocklist table
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS blocklist (
-            chat_id INTEGER PRIMARY KEY,
-            triggers TEXT,  -- JSON-encoded list of triggers
-            mode TEXT DEFAULT 'warn'
-        )
-    """)
-    
-    # Admin log settings
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS admin_logs (
-            chat_id INTEGER PRIMARY KEY,
-            enabled BOOLEAN DEFAULT 0
-        )
-    """)
-    
-    # Rules table
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS rules (
-            chat_id INTEGER PRIMARY KEY,
-            rules TEXT
-        )
-    """)
-    
-    # Restart stage
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS restart_stage (
-            id INTEGER PRIMARY KEY,
-            chat_id INTEGER,
-            message_id INTEGER
-        )
-    """)
-    
-    conn.commit()
-    conn.close()
-
-# Initialize database on import
-init_database()
+from wbb.core.storage import db
 
 # Database collections
 notesdb = db.notes
@@ -112,87 +48,15 @@ admin_log_db = db.admin_logs
 def obj_to_str(obj):
     """Convert Python object to base64 string."""
     if not obj:
-        return ""
-    return codecs.encode(pickle.dumps(obj), "base64").decode()
+        return False
+    string = codecs.encode(pickle.dumps(obj), "base64").decode()
+    return string
 
 
 def str_to_obj(string: str):
     """Convert base64 string back to Python object."""
-    if not string:
-        return None
-    return pickle.loads(codecs.decode(string.encode(), "base64"))
-
-
-# ==================== Warning Functions ====================
-
-async def get_warns_count():
-    """Get total count of warns and chats with warns."""
-    conn = get_db()
-    cursor = conn.execute("SELECT COUNT(DISTINCT chat_id) as chat_count FROM warnings")
-    chat_count = cursor.fetchone()["chat_count"]
-    
-    cursor = conn.execute("SELECT COUNT(*) as warn_count FROM warnings")
-    warn_count = cursor.fetchone()["warn_count"]
-    conn.close()
-    
-    return {"chats": chat_count or 0, "warns": warn_count or 0}
-
-
-async def get_warns(chat_id: int) -> Dict[str, dict]:
-    """Get all warnings for a chat."""
-    conn = get_db()
-    cursor = conn.execute(
-        "SELECT user_id, warns FROM warnings WHERE chat_id = ?",
-        (chat_id,)
-    )
-    warns = {row["user_id"]: {"warns": row["warns"]} for row in cursor}
-    conn.close()
-    return warns
-
-
-async def get_warn(chat_id: int, user_id: str) -> Optional[dict]:
-    """Get warning count for a specific user in a chat."""
-    conn = get_db()
-    cursor = conn.execute(
-        "SELECT warns FROM warnings WHERE chat_id = ? AND user_id = ?",
-        (chat_id, user_id)
-    )
-    row = cursor.fetchone()
-    conn.close()
-    
-    if row:
-        return {"warns": row["warns"]}
-    return None
-
-
-async def add_warn(chat_id: int, user_id: str, warn_data: dict):
-    """Add or update warning count for a user."""
-    warns = warn_data.get("warns", 0)
-    conn = get_db()
-    
-    conn.execute(
-        """
-        INSERT INTO warnings (chat_id, user_id, warns)
-        VALUES (?, ?, ?)
-        ON CONFLICT(chat_id, user_id) 
-        DO UPDATE SET warns = ?
-        """,
-        (chat_id, user_id, warns, warns)
-    )
-    
-    conn.commit()
-    conn.close()
-
-
-async def remove_warns(chat_id: int, user_id: str):
-    """Remove all warnings for a user in a chat."""
-    conn = get_db()
-    conn.execute(
-        "DELETE FROM warnings WHERE chat_id = ? AND user_id = ?",
-        (chat_id, user_id)
-    )
-    conn.commit()
-    conn.close()
+    obj = pickle.loads(codecs.decode(string.encode(), "base64"))
+    return obj
 
 
 async def int_to_alpha(user_id: int) -> str:
@@ -391,41 +255,22 @@ async def toggle_admin_log(chat_id: int, enabled: bool):
 
 async def get_rules(chat_id: int) -> str:
     """Get chat rules."""
-    conn = get_db()
-    cursor = conn.execute(
-        "SELECT rules FROM rules WHERE chat_id = ?",
-        (chat_id,)
-    )
-    row = cursor.fetchone()
-    conn.close()
-    return row["rules"] if row else None
+    chat = await rulesdb.find_one({"chat_id": chat_id})
+    return chat.get("rules", "") if chat else ""
 
 
 async def set_chat_rules(chat_id: int, rules: str):
     """Set chat rules."""
-    conn = get_db()
-    conn.execute(
-        """
-        INSERT INTO rules (chat_id, rules)
-        VALUES (?, ?)
-        ON CONFLICT(chat_id)
-        DO UPDATE SET rules = ?
-        """,
-        (chat_id, rules, rules)
+    await rulesdb.update_one(
+        {"chat_id": chat_id},
+        {"$set": {"rules": rules}},
+        upsert=True,
     )
-    conn.commit()
-    conn.close()
 
 
 async def delete_rules(chat_id: int):
     """Delete chat rules."""
-    conn = get_db()
-    conn.execute(
-        "DELETE FROM rules WHERE chat_id = ?",
-        (chat_id,)
-    )
-    conn.commit()
-    conn.close()
+    return await rulesdb.delete_one({"chat_id": chat_id})
 
 
 # ==================== Warns Functions ====================
@@ -759,112 +604,63 @@ async def update_antiservice_settings(chat_id: int, settings: dict):
 
 async def is_admin_log_enabled(chat_id: int) -> bool:
     """Check if admin logging is enabled."""
-    conn = get_db()
-    cursor = conn.execute(
-        "SELECT enabled FROM admin_logs WHERE chat_id = ?",
-        (chat_id,)
-    )
-    row = cursor.fetchone()
-    conn.close()
-    return bool(row and row["enabled"])
+    chat = await admin_log_db.find_one({"chat_id": chat_id})
+    return chat.get('enabled', False) if chat else False
 
 
 async def toggle_admin_log(chat_id: int, enabled: bool):
     """Toggle admin logging."""
-    conn = get_db()
-    conn.execute(
-        """
-        INSERT INTO admin_logs (chat_id, enabled)
-        VALUES (?, ?)
-        ON CONFLICT(chat_id)
-        DO UPDATE SET enabled = ?
-        """,
-        (chat_id, int(enabled), int(enabled))
+    await admin_log_db.update_one(
+        {"chat_id": chat_id},
+        {"$set": {"enabled": enabled}},
+        upsert=True
     )
-    conn.commit()
-    conn.close()
 
 
-# ==================== Blocklist Functions ====================
-
-async def get_blocklist(chat_id: int) -> dict:
-    """Get blocklist for a chat."""
-    conn = get_db()
-    cursor = conn.execute(
-        "SELECT triggers, mode FROM blocklist WHERE chat_id = ?",
-        (chat_id,)
-    )
-    row = cursor.fetchone()
-    conn.close()
-    
-    if row:
-        return {
-            "triggers": json.loads(row["triggers"]) if row["triggers"] else [],
-            "mode": row["mode"] or "warn"
-        }
-    return {"triggers": [], "mode": "warn"}
-
-
-async def update_blocklist(chat_id: int, triggers: list, mode: str = None):
-    """Update blocklist for a chat."""
-    conn = get_db()
-    triggers_json = json.dumps(triggers) if triggers else "[]"
-    
-    if mode is not None:
-        conn.execute("""
-            INSERT INTO blocklist (chat_id, triggers, mode)
-            VALUES (?, ?, ?)
-            ON CONFLICT(chat_id)
-            DO UPDATE SET triggers = ?, mode = ?
-        """, (chat_id, triggers_json, mode, triggers_json, mode))
-    else:
-        conn.execute("""
-            INSERT INTO blocklist (chat_id, triggers)
-            VALUES (?, ?)
-            ON CONFLICT(chat_id)
-            DO UPDATE SET triggers = ?
-        """, (chat_id, triggers_json, triggers_json))
-    
-    conn.commit()
-    conn.close()
-
+# ==================== Blacklist Functions ====================
 
 async def get_blacklist_settings(chat_id: int) -> dict:
     """Get blacklist settings."""
-    blocklist = await get_blocklist(chat_id)
-    return {
-        "chat_id": chat_id,
-        "enabled": True,
-        "action": blocklist.get("mode", "warn"),
-        "triggers": blocklist.get("triggers", []),
-        "warn_limit": 3,
-        "warn_time": 86400,
-        "mute_time": 3600,
-        "ban_time": 0,
-    }
+    settings = await blacklist_settings_db.find_one({"chat_id": chat_id})
+    if not settings:
+        return {
+            'action': 'mute_1h',
+            'send_warning': True,
+            'exempt_admins': True,
+            'case_sensitive': False,
+            'whole_words': True
+        }
+    return settings.get('settings', {})
 
 
 async def update_blacklist_settings(chat_id: int, settings: dict):
     """Update blacklist settings."""
-    triggers = settings.get("triggers", [])
-    mode = settings.get("action", "warn")
-    await update_blocklist(chat_id, triggers, mode)
+    await blacklist_settings_db.update_one(
+        {"chat_id": chat_id},
+        {"$set": {"settings": settings}},
+        upsert=True
+    )
 
 
 async def get_blacklist_stats(chat_id: int) -> dict:
     """Get blacklist statistics."""
-    # Note: Stats functionality is simplified in SQLite version
-    return {
-        "chat_id": chat_id,
-        "triggers": {},
-        "users": {},
-    }
+    stats = await blacklist_stats_db.find_one({"chat_id": chat_id})
+    return stats if stats else {}
 
 
 async def update_blacklist_stats(chat_id: int, word: str, user_id: int):
     """Update blacklist trigger statistics."""
-    # Note: Stats are not persisted in SQLite version
-    pass
+    await blacklist_stats_db.update_one(
+        {"chat_id": chat_id},
+        {
+            "$inc": {
+                "total_triggers": 1,
+                f"by_word.{word}": 1,
+                f"by_user.{user_id}": 1
+            }
+        },
+        upsert=True
+    )
 
 
 # ==================== PMPermit Functions ====================
@@ -1075,34 +871,28 @@ async def remove_sudo(user_id: int) -> bool:
 
 async def start_restart_stage(chat_id: int, message_id: int):
     """Store restart stage data."""
-    conn = get_db()
-    conn.execute("DELETE FROM restart_stage")  # Clear old data
-    conn.execute(
-        "INSERT INTO restart_stage (chat_id, message_id) VALUES (?, ?)",
-        (chat_id, message_id)
+    await restart_stagedb.update_one(
+        {"something": "something"},
+        {
+            "$set": {
+                "chat_id": chat_id,
+                "message_id": message_id,
+            }
+        },
+        upsert=True,
     )
-    conn.commit()
-    conn.close()
 
 
 async def clean_restart_stage() -> dict:
     """Retrieve and clean restart stage data."""
-    conn = get_db()
-    cursor = conn.execute("SELECT chat_id, message_id FROM restart_stage LIMIT 1")
-    row = cursor.fetchone()
-    
-    if row:
-        data = {
-            "chat_id": row["chat_id"],
-            "message_id": row["message_id"]
-        }
-        conn.execute("DELETE FROM restart_stage")
-        conn.commit()
-        conn.close()
-        return data
-    
-    conn.close()
-    return {}
+    data = await restart_stagedb.find_one({"something": "something"})
+    if not data:
+        return {}
+    await restart_stagedb.delete_one({"something": "something"})
+    return {
+        "chat_id": data["chat_id"],
+        "message_id": data["message_id"],
+    }
 
 
 # ==================== Flood Functions ====================

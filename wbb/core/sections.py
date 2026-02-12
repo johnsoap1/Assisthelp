@@ -1,33 +1,21 @@
 """
-
+Text formatting helpers for bot outputs.
 """
 
-n = "\n"
-w = " "
+def bold(text: str) -> str:
+    """Make text bold in Markdown."""
+    return f"**{text}**"
 
-bold = lambda x: f"**{x}:** "
-bold_ul = lambda x: f"**--{x}:**-- "
+def section(title: str, body: dict = None, indent: int = 0) -> str:
+    """Create a formatted section with title and body."""
+    spaces = " " * indent
+    text = f"\n{spaces}{bold(title)}\n"
 
-mono = lambda x: f"`{x}`{n}"
+    if body:
+        for key, value in body.items():
+            text += f"{spaces}  • {key}: {value}\n"
 
-
-def section(
-    title: str,
-    body: dict,
-    indent: int = 2,
-    underline: bool = False,
-) -> str:
-    text = (bold_ul(title) + n) if underline else bold(title) + n
-
-    for key, value in body.items():
-        if value is not None:
-            text += (
-                indent * w
-                + bold(key)
-                + (
-                    (value[0] + n)
-                    if isinstance(value, list) and isinstance(value[0], str)
-                    else mono(value)
-                )
-            )
     return text
+
+# Width constant
+w = " "
