@@ -146,3 +146,45 @@ async def check_format(ikb, raw_text: str):
             return raw_text
     else:
         return raw_text
+
+
+async def get_data_and_name(replied_message, message):
+    """Extract data and name from message for filters/notes."""
+    text = message.text.markdown if message.text else message.caption.markdown
+    name = text.split(None, 1)[1].strip()
+    text = name.split(" ", 1)
+    
+    if len(text) > 1:
+        name = text[0]
+        data = text[1].strip()
+        if replied_message and (
+            replied_message.sticker or replied_message.video_note
+        ):
+            data = None
+    else:
+        if replied_message and (
+            replied_message.sticker or replied_message.video_note
+        ):
+            data = None
+        elif (
+            replied_message
+            and not replied_message.text
+            and not replied_message.caption
+        ):
+            data = None
+        else:
+            data = (
+                replied_message.text.markdown
+                if replied_message.text
+                else replied_message.caption.markdown
+            )
+            command = message.command[0]
+            match = f"/{command} " + name
+            if not message.reply_to_message and message.text:
+                if match == data:
+                    data = "error"
+            elif not message.reply_to_message and not message.text:
+                if match == data:
+                    data = None
+    
+    return data, name
