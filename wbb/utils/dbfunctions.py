@@ -115,6 +115,13 @@ def init_tables():
         )
     """)
     
+    # Blacklisted chats table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS blacklisted_chats (
+            chat_id INTEGER PRIMARY KEY
+        )
+    """)
+    
     conn.commit()
     conn.close()
 
@@ -1222,3 +1229,40 @@ async def update_blacklist_stats(chat_id: int, word: str, user_id: int):
            VALUES (?, NULL, ?, ?)""",
         (chat_id, json.dumps({}), stats_json)
     )
+
+
+# Blacklist chat functions
+async def blacklist_chat(chat_id: int) -> bool:
+    """Add a chat to blacklist."""
+    try:
+        await async_db(
+            "INSERT OR IGNORE INTO blacklisted_chats (chat_id) VALUES (?)",
+            (chat_id,)
+        )
+        return True
+    except:
+        return False
+
+
+async def whitelist_chat(chat_id: int) -> bool:
+    """Remove a chat from blacklist."""
+    try:
+        result = await async_db(
+            "DELETE FROM blacklisted_chats WHERE chat_id = ?",
+            (chat_id,)
+        )
+        return result > 0
+    except:
+        return False
+
+
+async def blacklisted_chats() -> list:
+    """Get list of blacklisted chat IDs."""
+    try:
+        results = await async_db(
+            "SELECT chat_id FROM blacklisted_chats",
+            fetchall=True
+        )
+        return [row[0] for row in results]
+    except:
+        return []
