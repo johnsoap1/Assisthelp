@@ -129,6 +129,25 @@ async def get_all_notes(chat_id: int):
     
     return await loop.run_in_executor(None, db_op)
 
+
+def extract_urls(reply_markup):
+    """Extract URLs from inline keyboard markup."""
+    urls = []
+    if not reply_markup or not hasattr(reply_markup, 'inline_keyboard'):
+        return urls
+    
+    for row in reply_markup.inline_keyboard:
+        for button in row:
+            if hasattr(button, 'url') and button.url:
+                # Extract button text and URL
+                text = getattr(button, 'text', '')
+                url = button.url
+                # Use button text as name, or generate one
+                name = text if text else f"button_{len(urls) + 1}"
+                urls.append((name, text, url))
+    
+    return urls
+
 # Commands
 @app.on_message(filters.command("save") & filters.group)
 @adminsOnly("can_change_info")
