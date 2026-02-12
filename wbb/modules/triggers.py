@@ -20,20 +20,9 @@ from pyrogram import filters
 from pyrogram.types import Message
 from wbb import app
 
-try:
-    from wbb import SUDOERS, SUDOERS_SET
-except ImportError:
-    SUDOERS, SUDOERS_SET = [], set()
-
-try:
-    from wbb.core.storage import db
-    triggers_db = db.triggers
-    stats_db = db.trigger_stats
-except Exception:
-    triggers_db = None
-    stats_db = None
-    triggers_storage = {}
-    stats_storage = {}
+from wbb.utils.dbfunctions import (
+    add_trigger_db, remove_trigger_db, get_chat_triggers_db, record_trigger_usage_db
+)
 
 # In-memory storage for cooldowns
 trigger_cooldowns: Dict[int, Dict[str, float]] = {}
@@ -58,78 +47,22 @@ async def add_trigger(chat_id: int, trigger: str, response: str,
                      is_global=False, is_media=False,
                      file_id=None, file_type=None, use_regex=False):
     """Create or append a trigger response."""
-    query = {"chat_id": 0 if is_global else chat_id, "trigger": trigger.lower()}
-    response_entry = {
-        "text": response,
-        "is_media": is_media,
-        "file_id": file_id,
-        "file_type": file_type,
-        "added_at": time.time()
-    }
-
-    if triggers_db is not None:
-        existing = await triggers_db.find_one(query)
-        if existing:
-            await triggers_db.update_one(query, {"$push": {"responses": response_entry}})
-        else:
-            await triggers_db.insert_one({
-                **query,
-                "use_regex": use_regex,
-                "created_at": time.time(),
-                "usage_count": 0,
-                "responses": [response_entry]
-            })
-    else:
-        key = f"{0 if is_global else chat_id}:{trigger.lower()}"
-        data = triggers_storage.setdefault(key, {
-            "chat_id": 0 if is_global else chat_id,
-            "trigger": trigger.lower(),
-            "responses": [],
-            "use_regex": use_regex,
-            "usage_count": 0
-        })
-        data["responses"].append(response_entry)
+    await add_trigger_db(chat_id, trigger, response, is_global, is_media, file_id, file_type, use_regex)
 
 
 async def remove_trigger(chat_id: int, trigger: str, is_global=False) -> bool:
-    query = {"chat_id": 0 if is_global else chat_id, "trigger": trigger.lower()}
-    if triggers_db is not None:
-        result = await triggers_db.delete_many(query)
-        return result.deleted_count > 0
-    else:
-        key = f"{0 if is_global else chat_id}:{trigger.lower()}"
-        if key in triggers_storage:
-            del triggers_storage[key]
-            return True
-        return False
+    """Remove a trigger."""
+    return await remove_trigger_db(chat_id, trigger, is_global)
 
 
 async def get_chat_triggers(chat_id: int, include_global=True) -> List[Dict]:
-    if triggers_db is not None:
-        if include_global:
-            cursor = await triggers_db.find({"$or": [{"chat_id": chat_id}, {"chat_id": 0}]})
-        else:
-            cursor = await triggers_db.find({"chat_id": chat_id})
-        return await cursor.to_list(length=None)
-    else:
-        # Fallback to in-memory
-        return [v for v in triggers_storage.values() if v.get("chat_id") == chat_id or (include_global and v.get("chat_id") == 0)]
+    """Get triggers for a chat."""
+    return await get_chat_triggers_db(chat_id, include_global)
 
 
 async def record_trigger_usage(chat_id: int, trigger: str):
     """Record trigger usage for statistics."""
-    if stats_db is not None:
-        await stats_db.update_one(
-            {"chat_id": chat_id, "trigger": trigger.lower()},
-            {"$inc": {"count": 1}, "$set": {"last_used": time.time()}},
-            upsert=True
-        )
-    else:
-        key = f"{chat_id}:{trigger.lower()}"
-        if key not in stats_storage:
-            stats_storage[key] = {"count": 0, "last_used": 0}
-        stats_storage[key]["count"] += 1
-        stats_storage[key]["last_used"] = time.time()
+    await record_trigger_usage_db(chat_id, trigger)
 
 
 async def check_cooldown(user_id: int, trigger: str) -> bool:

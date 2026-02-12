@@ -8,7 +8,6 @@ from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, 
 from pyrogram.errors import MessageNotModified
 
 from wbb import SUDOERS_SET, app, BOT_ID
-from wbb.core.storage import db
 
 # Custom filter to ignore bot's own messages
 def is_not_bot(_, __, message: Message) -> bool:

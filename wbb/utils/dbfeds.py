@@ -1,200 +1,513 @@
-from datetime import datetime
+"""
+SQLite Federation Database Functions
+Replaces MongoDB federation operations with SQLite equivalents.
+"""
+import asyncio
+import sqlite3
+from functools import wraps
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-import pytz
+# Database path
+DB_PATH = Path("wbb.sqlite")
 
-from wbb import SUDOERS
-from wbb.core.storage import db
+# ==================== DATABASE SETUP ====================
 
-fedsdb = db.feds
-
-
-def get_fed_info(fed_id):
-    get = fedsdb.find_one({"fed_id": str(fed_id)})
-    if get is None:
-        return False
-    return get
-
-
-async def get_fed_id(chat_id):
-    get = await fedsdb.find_one({"chat_ids.chat_id": int(chat_id)})
-
-    if get is None:
-        return False
-    else:
-        for chat_info in get.get("chat_ids", []):
-            if chat_info["chat_id"] == int(chat_id):
-                return get["fed_id"]
-
-    return False
+def get_db():
+    """Get SQLite database connection."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
-async def get_feds_by_owner(owner_id):
-    cursor = fedsdb.find({"owner_id": owner_id})
-    feds = await cursor.to_list(length=None)
-    if not feds:
-        return False
-    federations = [
-        {"fed_id": fed["fed_id"], "fed_name": fed["fed_name"]} for fed in feds
-    ]
-    return federations
+def async_db(func):
+    """Decorator to run synchronous DB operations in executor."""
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
+    return wrapper
 
 
-async def transfer_owner(fed_id, current_owner_id, new_owner_id):
-    if await is_user_fed_owner(fed_id, current_owner_id):
-        await fedsdb.update_one(
-            {"fed_id": fed_id, "owner_id": current_owner_id},
-            {"$set": {"owner_id": new_owner_id}},
+def init_federation_tables():
+    """Initialize federation-related tables."""
+    conn = get_db()
+
+    # Main federation table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS federations (
+            fed_id TEXT PRIMARY KEY,
+            fed_name TEXT NOT NULL,
+            owner_id INTEGER NOT NULL,
+            owner_mention TEXT,
+            log_group_id INTEGER,
+            created_date INTEGER
         )
+    """)
+
+    # Federation admins table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS fed_admins (
+            fed_id TEXT,
+            user_id INTEGER,
+            promoted_date INTEGER,
+            PRIMARY KEY (fed_id, user_id),
+            FOREIGN KEY (fed_id) REFERENCES federations(fed_id) ON DELETE CASCADE
+        )
+    """)
+
+    # Federation banned users table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS fed_bans (
+            fed_id TEXT,
+            user_id INTEGER,
+            reason TEXT,
+            date TEXT,
+            banned_by INTEGER,
+            PRIMARY KEY (fed_id, user_id),
+            FOREIGN KEY (fed_id) REFERENCES federations(fed_id) ON DELETE CASCADE
+        )
+    """)
+
+    # Federation chats table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS fed_chats (
+            fed_id TEXT,
+            chat_id INTEGER,
+            chat_title TEXT,
+            joined_date INTEGER,
+            PRIMARY KEY (fed_id, chat_id),
+            FOREIGN KEY (fed_id) REFERENCES federations(fed_id) ON DELETE CASCADE
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+# Initialize tables
+init_federation_tables()
+
+# ==================== FEDERATION CRUD OPERATIONS ====================
+
+@async_db
+def create_federation(fed_id: str, fed_name: str, owner_id: int,
+                     owner_mention: str, log_group_id: int) -> bool:
+    """Create a new federation."""
+    try:
+        conn = get_db()
+        import time
+        conn.execute("""
+            INSERT INTO federations (fed_id, fed_name, owner_id, owner_mention, log_group_id, created_date)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (fed_id, fed_name, owner_id, owner_mention, log_group_id, int(time.time())))
+        conn.commit()
+        conn.close()
         return True
-    else:
+    except Exception as e:
+        print(f"Error creating federation: {e}")
         return False
 
 
-async def set_log_chat(fed_id, log_group_id: int):
-    await fedsdb.update_one(
-        {"fed_id": fed_id}, {"$set": {"log_group_id": log_group_id}}
+@async_db
+def get_fed_info(fed_id: str) -> Optional[Dict[str, Any]]:
+    """Get federation information."""
+    conn = get_db()
+
+    # Get main fed info
+    cursor = conn.execute(
+        "SELECT * FROM federations WHERE fed_id = ?",
+        (fed_id,)
     )
-    return
+    row = cursor.fetchone()
 
+    if not row:
+        conn.close()
+        return None
 
-async def get_fed_name(chat_id):
-    get = await fedsdb.find_one(int(chat_id))
-    if get is None:
-        return False
-    else:
-        return get["fed_name"]
-
-
-async def is_user_fed_owner(fed_id, user_id: int):
-    getfed = await get_fed_info(fed_id)
-    if not getfed:
-        return False
-    owner_id = getfed["owner_id"]
-    if user_id == owner_id or user_id == SUDOERS:
-        return True
-    else:
-        return False
-
-
-async def search_fed_by_id(fed_id):
-    get = await fedsdb.find_one({"fed_id": str(fed_id)})
-
-    if get is not None:
-        return get
-    else:
-        return False
-
-
-def chat_join_fed(fed_id, chat_name, chat_id):
-    return fedsdb.update_one(
-        {"fed_id": fed_id},
-        {
-            "$push": {
-                "chat_ids": {"chat_id": int(chat_id), "chat_name": chat_name}
-            }
-        },
+    # Get admins
+    cursor = conn.execute(
+        "SELECT user_id FROM fed_admins WHERE fed_id = ?",
+        (fed_id,)
     )
+    admins = [r["user_id"] for r in cursor.fetchall()]
 
-
-async def chat_leave_fed(chat_id):
-    result = await fedsdb.update_one(
-        {"chat_ids.chat_id": int(chat_id)},
-        {"$pull": {"chat_ids": {"chat_id": int(chat_id)}}},
+    # Get banned users
+    cursor = conn.execute(
+        "SELECT user_id, reason, date FROM fed_bans WHERE fed_id = ?",
+        (fed_id,)
     )
-    if result.modified_count > 0:
-        return True
-    else:
-        return False
+    banned_users = [
+        {"user_id": r["user_id"], "reason": r["reason"], "date": r["date"]}
+        for r in cursor.fetchall()
+    ]
 
-
-async def user_join_fed(fed_id, user_id):
-    result = await fedsdb.update_one(
-        {"fed_id": fed_id},
-        {"$addToSet": {"fadmins": int(user_id)}},
-        upsert=True,
+    # Get chats
+    cursor = conn.execute(
+        "SELECT chat_id FROM fed_chats WHERE fed_id = ?",
+        (fed_id,)
     )
-    if result.modified_count > 0:
+    chat_ids = [r["chat_id"] for r in cursor.fetchall()]
+
+    conn.close()
+
+    return {
+        "fed_id": row["fed_id"],
+        "fed_name": row["fed_name"],
+        "owner_id": row["owner_id"],
+        "owner_mention": row["owner_mention"],
+        "fadmins": admins,
+        "banned_users": banned_users,
+        "chat_ids": chat_ids,
+        "log_group_id": row["log_group_id"]
+    }
+
+
+@async_db
+def search_fed_by_id(fed_id: str) -> Optional[Dict[str, Any]]:
+    """Search for federation by ID."""
+    return get_fed_info(fed_id)
+
+
+@async_db
+def delete_federation(fed_id: str) -> bool:
+    """Delete a federation and all related data."""
+    try:
+        conn = get_db()
+        # CASCADE will automatically delete related records
+        conn.execute("DELETE FROM federations WHERE fed_id = ?", (fed_id,))
+        conn.commit()
+        conn.close()
         return True
-    else:
+    except Exception as e:
+        print(f"Error deleting federation: {e}")
         return False
 
 
-async def user_demote_fed(fed_id, user_id):
-    result = await fedsdb.update_one(
-        {"fed_id": fed_id}, {"$pull": {"fadmins": int(user_id)}}
+@async_db
+def rename_federation(fed_id: str, new_name: str) -> bool:
+    """Rename a federation."""
+    try:
+        conn = get_db()
+        conn.execute(
+            "UPDATE federations SET fed_name = ? WHERE fed_id = ?",
+            (new_name, fed_id)
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Error renaming federation: {e}")
+        return False
+
+# ==================== FEDERATION OWNER OPERATIONS ====================
+
+@async_db
+def get_feds_by_owner(owner_id: int) -> List[Dict[str, str]]:
+    """Get all federations owned by a user."""
+    conn = get_db()
+    cursor = conn.execute(
+        "SELECT fed_id, fed_name FROM federations WHERE owner_id = ?",
+        (owner_id,)
     )
-    if result.modified_count > 0:
+    rows = cursor.fetchall()
+    conn.close()
+
+    return [{"fed_id": r["fed_id"], "fed_name": r["fed_name"]} for r in rows]
+
+
+@async_db
+def is_user_fed_owner(fed_id: str, user_id: int) -> bool:
+    """Check if user is federation owner."""
+    conn = get_db()
+    cursor = conn.execute(
+        "SELECT owner_id FROM federations WHERE fed_id = ?",
+        (fed_id,)
+    )
+    row = cursor.fetchone()
+    conn.close()
+
+    return row and row["owner_id"] == user_id
+
+
+@async_db
+def transfer_owner(fed_id: str, old_owner_id: int, new_owner_id: int) -> bool:
+    """Transfer federation ownership."""
+    try:
+        conn = get_db()
+        cursor = conn.execute(
+            "SELECT owner_id FROM federations WHERE fed_id = ?",
+            (fed_id,)
+        )
+        row = cursor.fetchone()
+
+        if not row or row["owner_id"] != old_owner_id:
+            conn.close()
+            return False
+
+        conn.execute(
+            "UPDATE federations SET owner_id = ? WHERE fed_id = ?",
+            (new_owner_id, fed_id)
+        )
+        conn.commit()
+        conn.close()
         return True
-    else:
+    except Exception as e:
+        print(f"Error transferring ownership: {e}")
         return False
 
+# ==================== FEDERATION ADMIN OPERATIONS ====================
 
-async def search_user_in_fed(fed_id, user_id):
-    getfed = await search_fed_by_id(fed_id)
-    if getfed is None:
-        return False
-    fadmins = getfed["fadmins"]
-    if user_id in fadmins:
+@async_db
+def user_join_fed(fed_id: str, user_id: int) -> bool:
+    """Add a user as federation admin."""
+    try:
+        import time
+        conn = get_db()
+        conn.execute("""
+            INSERT INTO fed_admins (fed_id, user_id, promoted_date)
+            VALUES (?, ?, ?)
+            ON CONFLICT(fed_id, user_id) DO NOTHING
+        """, (fed_id, user_id, int(time.time())))
+        conn.commit()
+        conn.close()
         return True
-    else:
+    except Exception as e:
+        print(f"Error adding fed admin: {e}")
         return False
 
 
-async def chat_id_and_names_in_fed(fed_id):
-    getfed = await search_fed_by_id(fed_id)
+@async_db
+def user_demote_fed(fed_id: str, user_id: int) -> bool:
+    """Remove a user from federation admins."""
+    try:
+        conn = get_db()
+        conn.execute(
+            "DELETE FROM fed_admins WHERE fed_id = ? AND user_id = ?",
+            (fed_id, user_id)
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Error demoting fed admin: {e}")
+        return False
 
-    if getfed is None or "chat_ids" not in getfed:
-        return [], []
 
-    chat_ids = [chat["chat_id"] for chat in getfed["chat_ids"]]
-    chat_names = [chat["chat_name"] for chat in getfed["chat_ids"]]
+@async_db
+def search_user_in_fed(fed_id: str, user_id: int) -> bool:
+    """Check if user is a federation admin."""
+    conn = get_db()
+    cursor = conn.execute(
+        "SELECT user_id FROM fed_admins WHERE fed_id = ? AND user_id = ?",
+        (fed_id, user_id)
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return row is not None
+
+# ==================== FEDERATION CHAT OPERATIONS ====================
+
+@async_db
+def chat_join_fed(fed_id: str, chat_title: str, chat_id: int) -> bool:
+    """Add a chat to federation."""
+    try:
+        import time
+        conn = get_db()
+        conn.execute("""
+            INSERT INTO fed_chats (fed_id, chat_id, chat_title, joined_date)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(fed_id, chat_id) DO UPDATE SET chat_title = ?
+        """, (fed_id, chat_id, chat_title, int(time.time()), chat_title))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Error adding chat to fed: {e}")
+        return False
+
+
+@async_db
+def chat_leave_fed(chat_id: int) -> bool:
+    """Remove a chat from all federations."""
+    try:
+        conn = get_db()
+        cursor = conn.execute(
+            "SELECT COUNT(*) as count FROM fed_chats WHERE chat_id = ?",
+            (chat_id,)
+        )
+        row = cursor.fetchone()
+
+        if row["count"] == 0:
+            conn.close()
+            return False
+
+        conn.execute("DELETE FROM fed_chats WHERE chat_id = ?", (chat_id,))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Error removing chat from fed: {e}")
+        return False
+
+
+@async_db
+def get_fed_id(chat_id: int) -> Optional[str]:
+    """Get federation ID for a chat."""
+    conn = get_db()
+    cursor = conn.execute(
+        "SELECT fed_id FROM fed_chats WHERE chat_id = ?",
+        (chat_id,)
+    )
+    row = cursor.fetchone()
+    conn.close()
+
+    return row["fed_id"] if row else None
+
+
+@async_db
+def chat_id_and_names_in_fed(fed_id: str) -> tuple:
+    """Get all chat IDs and names in federation."""
+    conn = get_db()
+    cursor = conn.execute(
+        "SELECT chat_id, chat_title FROM fed_chats WHERE fed_id = ?",
+        (fed_id,)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+
+    chat_ids = [r["chat_id"] for r in rows]
+    chat_names = [r["chat_title"] for r in rows]
+
     return chat_ids, chat_names
 
+# ==================== FEDERATION BAN OPERATIONS ====================
 
-async def add_fban_user(fed_id, user_id, reason):
-    current_date = datetime.now(pytz.timezone("Asia/Kolkata")).strftime(
-        "%Y-%m-%d %H:%M"
-    )
-    await fedsdb.update_one(
-        {"fed_id": fed_id},
-        {
-            "$push": {
-                "banned_users": {
-                    "user_id": int(user_id),
-                    "reason": reason,
-                    "date": current_date,
-                }
-            }
-        },
-        upsert=True,
-    )
+@async_db
+def add_fban_user(fed_id: str, user_id: int, reason: str, banned_by: int = None) -> bool:
+    """Add a user to federation ban list."""
+    try:
+        from datetime import datetime
+        conn = get_db()
+        date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-
-async def remove_fban_user(fed_id, user_id):
-    await fedsdb.update_one(
-        {"fed_id": fed_id},
-        {"$pull": {"banned_users": {"user_id": int(user_id)}}},
-    )
-
-
-async def check_banned_user(fed_id, user_id):
-    result = await fedsdb.find_one(
-        {"fed_id": fed_id, "banned_users.user_id": user_id}
-    )
-    if result and "banned_users" in result:
-        for user in result["banned_users"]:
-            if user.get("user_id") == user_id:
-                return {"reason": user.get("reason"), "date": user.get("date")}
-
-    return False
-
-
-async def get_user_fstatus(user_id):
-    cursor = fedsdb.find({"banned_users.user_id": user_id})
-    feds = await cursor.to_list(length=None)
-    if not feds:
+        conn.execute("""
+            INSERT INTO fed_bans (fed_id, user_id, reason, date, banned_by)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(fed_id, user_id) DO UPDATE SET reason = ?, date = ?
+        """, (fed_id, user_id, reason, date, banned_by, reason, date))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Error adding fban: {e}")
         return False
-    federations = [
-        {"fed_id": fed["fed_id"], "fed_name": fed["fed_name"]} for fed in feds
+
+
+@async_db
+def remove_fban_user(fed_id: str, user_id: int) -> bool:
+    """Remove a user from federation ban list."""
+    try:
+        conn = get_db()
+        conn.execute(
+            "DELETE FROM fed_bans WHERE fed_id = ? AND user_id = ?",
+            (fed_id, user_id)
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Error removing fban: {e}")
+        return False
+
+
+@async_db
+def check_banned_user(fed_id: str, user_id: int) -> Optional[Dict[str, str]]:
+    """Check if user is banned in federation."""
+    conn = get_db()
+    cursor = conn.execute(
+        "SELECT reason, date FROM fed_bans WHERE fed_id = ? AND user_id = ?",
+        (fed_id, user_id)
+    )
+    row = cursor.fetchone()
+    conn.close()
+
+    if row:
+        return {"reason": row["reason"], "date": row["date"]}
+    return None
+
+
+@async_db
+def get_user_fstatus(user_id: int) -> List[Dict[str, str]]:
+    """Get all federations where user is banned."""
+    conn = get_db()
+    cursor = conn.execute("""
+        SELECT f.fed_id, f.fed_name, fb.reason, fb.date
+        FROM fed_bans fb
+        JOIN federations f ON fb.fed_id = f.fed_id
+        WHERE fb.user_id = ?
+    """, (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    return [
+        {
+            "fed_id": r["fed_id"],
+            "fed_name": r["fed_name"],
+            "reason": r["reason"],
+            "date": r["date"]
+        }
+        for r in rows
     ]
-    return federations
+
+# ==================== LOG OPERATIONS ====================
+
+@async_db
+def set_log_chat(fed_id: str, log_group_id: int) -> bool:
+    """Set log group for federation."""
+    try:
+        conn = get_db()
+        conn.execute(
+            "UPDATE federations SET log_group_id = ? WHERE fed_id = ?",
+            (log_group_id, fed_id)
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Error setting log chat: {e}")
+        return False
+
+# ==================== COMPATIBILITY LAYER ====================
+
+# For MongoDB-style access (backward compatibility)
+class FakeCollection:
+    """Fake MongoDB collection for compatibility."""
+
+    async def update_one(self, query, update, upsert=False):
+        """MongoDB-style update_one."""
+        if "fed_id" in query:
+            fed_id = query["fed_id"]
+            data = update.get("$set", {})
+
+            if "fed_name" in data:
+                # Creating or updating federation
+                result = await create_federation(
+                    fed_id,
+                    data.get("fed_name", ""),
+                    data.get("owner_id", 0),
+                    data.get("owner_mention", ""),
+                    data.get("log_group_id", 0)
+                )
+                return type('obj', (object,), {'acknowledged': result})
+
+        return type('obj', (object,), {'acknowledged': False})
+
+    async def delete_one(self, query):
+        """MongoDB-style delete_one."""
+        if "fed_id" in query:
+            result = await delete_federation(query["fed_id"])
+            return type('obj', (object,), {'acknowledged': result})
+        return type('obj', (object,), {'acknowledged': False})
+
+# Create instance for backward compatibility
+fedsdb = FakeCollection()

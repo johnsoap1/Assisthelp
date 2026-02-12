@@ -11,6 +11,11 @@ import logging
 import re
 from wbb.core.storage import db
 
+from wbb.utils.dbfunctions import (
+    add_blocked_country, add_blocked_lang, remove_blocked_country,
+    remove_blocked_lang, get_chat_blocks, clear_chat_blocks
+)
+
 logger = logging.getLogger(__name__)
 
 __MODULE__ = "Region Blocker"
@@ -319,7 +324,7 @@ async def block_countries(_, message: Message):
             invalid_countries.append(country)
 
     if valid_countries:
-        await blocker_db.add_blocked_country(message.chat.id, valid_countries)
+        await add_blocked_country(message.chat.id, valid_countries)
         text = f"✅ Blocked: {', '.join(valid_countries)}\n"
     else:
         text = ""
@@ -360,7 +365,7 @@ async def block_languages(_, message: Message):
             invalid_langs.append(lang)
 
     if valid_langs:
-        await blocker_db.add_blocked_lang(message.chat.id, valid_langs)
+        await add_blocked_lang(message.chat.id, valid_langs)
         text = f"✅ Blocked: {', '.join(valid_langs)}\n"
     else:
         text = ""
@@ -388,7 +393,7 @@ async def unblock_countries(_, message: Message):
         return
 
     countries = message.command[1].split(",")
-    await blocker_db.remove_blocked_country(message.chat.id, countries)
+    await remove_blocked_country(message.chat.id, countries)
     await message.reply_text(f"✅ Unblocked: {', '.join(countries)}")
 
 
@@ -409,7 +414,7 @@ async def unblock_languages(_, message: Message):
         return
 
     languages = message.command[1].split(",")
-    await blocker_db.remove_blocked_lang(message.chat.id, languages)
+    await remove_blocked_lang(message.chat.id, languages)
     await message.reply_text(f"✅ Unblocked: {', '.join(languages)}")
 
 
@@ -417,7 +422,7 @@ async def unblock_languages(_, message: Message):
 async def show_blocklist(_, message: Message):
     """Show blocked countries and languages"""
     
-    blocks = await blocker_db.get_chat_blocks(message.chat.id)
+    blocks = await get_chat_blocks(message.chat.id)
     
     text = "🛡️ **Block List for this Chat:**\n\n"
     
@@ -443,5 +448,5 @@ async def clear_blocklist(_, message: Message):
         await message.reply_text("❌ Only admins and sudoers can use this command!")
         return
 
-    await blocker_db.clear_blocks(message.chat.id)
+    await clear_chat_blocks(message.chat.id)
     await message.reply_text("✅ All blocks cleared for this chat!")

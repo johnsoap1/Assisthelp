@@ -4,6 +4,7 @@ Complete admin functionality with command management
 """
 
 import asyncio
+import json
 import re
 from contextlib import suppress
 from time import time
@@ -1012,6 +1013,15 @@ async def toggle_admin_log(_, message: Message):
 
 # ============= BLOCKLIST SYSTEM =============
 
+# Helper function for SQLite blocklist operations
+def get_db():
+    """Get SQLite database connection."""
+    import sqlite3
+    from pathlib import Path
+    conn = sqlite3.connect(Path("wbb.sqlite"))
+    conn.row_factory = sqlite3.Row
+    return conn
+
 @app.on_message(filters.command("addblocklist") & filters.group)
 @adminsOnly("can_restrict_members")
 async def add_blocklist(_, message: Message):
@@ -1037,38 +1047,39 @@ async def add_blocklist(_, message: Message):
     if not triggers:
         return await message.reply_text("No valid blocklist items found.")
     
-    # Get existing blocklist from SQLite
-    conn = get_db()
-    cursor = conn.execute(
-        "SELECT triggers FROM blocklist WHERE chat_id = ?",
-        (message.chat.id,)
-    )
-    row = cursor.fetchone()
+    # Run DB operation in executor to avoid blocking
+    loop = asyncio.get_event_loop()
     
-    if row:
-        # Merge with existing
-        import json
-        current_triggers = set(json.loads(row["triggers"]))
-        new_triggers = set(triggers)
-        all_triggers = list(current_triggers.union(new_triggers))
-        added = len(all_triggers) - len(current_triggers)
+    def db_operation():
+        conn = get_db()
+        cursor = conn.execute(
+            "SELECT triggers FROM blocklist WHERE chat_id = ?",
+            (message.chat.id,)
+        )
+        row = cursor.fetchone()
         
-        conn.execute(
-            "UPDATE blocklist SET triggers = ? WHERE chat_id = ?",
-            (json.dumps(all_triggers), message.chat.id)
-        )
-    else:
-        # Create new
-        import json
-        conn.execute(
-            "INSERT INTO blocklist (chat_id, triggers, mode) VALUES (?, ?, ?)",
-            (message.chat.id, json.dumps(triggers), "warn")
-        )
-        added = len(triggers)
+        if row:
+            current_triggers = set(json.loads(row["triggers"]))
+            new_triggers = set(triggers)
+            all_triggers = list(current_triggers.union(new_triggers))
+            added = len(all_triggers) - len(current_triggers)
+            
+            conn.execute(
+                "UPDATE blocklist SET triggers = ? WHERE chat_id = ?",
+                (json.dumps(all_triggers), message.chat.id)
+            )
+        else:
+            conn.execute(
+                "INSERT INTO blocklist (chat_id, triggers, mode) VALUES (?, ?, ?)",
+                (message.chat.id, json.dumps(triggers), "warn")
+            )
+            added = len(triggers)
+        
+        conn.commit()
+        conn.close()
+        return added
     
-    conn.commit()
-    conn.close()
-    
+    added = await loop.run_in_executor(None, db_operation)
     await message.reply_text(f"✅ Added {added} blocklist item(s).")
 
 
@@ -1096,34 +1107,41 @@ async def remove_blocklist(_, message: Message):
     if not triggers_to_remove:
         return await message.reply_text("No valid items to remove.")
     
-    conn = get_db()
-    cursor = conn.execute(
-        "SELECT triggers FROM blocklist WHERE chat_id = ?",
-        (message.chat.id,)
-    )
-    row = cursor.fetchone()
+    loop = asyncio.get_event_loop()
     
-    if not row:
-        conn.close()
-        return await message.reply_text("No blocklist found for this chat.")
-    
-    import json
-    current_triggers = set(json.loads(row["triggers"]))
-    remove_set = set(triggers_to_remove)
-    remaining = list(current_triggers - remove_set)
-    removed = len(current_triggers) - len(remaining)
-    
-    if remaining:
-        conn.execute(
-            "UPDATE blocklist SET triggers = ? WHERE chat_id = ?",
-            (json.dumps(remaining), message.chat.id)
+    def db_operation():
+        conn = get_db()
+        cursor = conn.execute(
+            "SELECT triggers FROM blocklist WHERE chat_id = ?",
+            (message.chat.id,)
         )
-    else:
-        # Remove entire row if no triggers left
-        conn.execute("DELETE FROM blocklist WHERE chat_id = ?", (message.chat.id,))
+        row = cursor.fetchone()
+        
+        if not row:
+            conn.close()
+            return None
+        
+        current_triggers = set(json.loads(row["triggers"]))
+        remove_set = set(triggers_to_remove)
+        remaining = list(current_triggers - remove_set)
+        removed = len(current_triggers) - len(remaining)
+        
+        if remaining:
+            conn.execute(
+                "UPDATE blocklist SET triggers = ? WHERE chat_id = ?",
+                (json.dumps(remaining), message.chat.id)
+            )
+        else:
+            conn.execute("DELETE FROM blocklist WHERE chat_id = ?", (message.chat.id,))
+        
+        conn.commit()
+        conn.close()
+        return removed
     
-    conn.commit()
-    conn.close()
+    removed = await loop.run_in_executor(None, db_operation)
+    
+    if removed is None:
+        return await message.reply_text("No blocklist found for this chat.")
     
     await message.reply_text(f"✅ Removed {removed} blocklist item(s).")
 
@@ -1132,20 +1150,23 @@ async def remove_blocklist(_, message: Message):
 @adminsOnly("can_restrict_members")
 async def show_blocklist(_, message: Message):
     """Show current blocklist."""
-    conn = get_db()
-    cursor = conn.execute(
-        "SELECT triggers, mode FROM blocklist WHERE chat_id = ?",
-        (message.chat.id,)
-    )
-    row = cursor.fetchone()
-    conn.close()
+    loop = asyncio.get_event_loop()
     
-    if not row or not row["triggers"]:
-        return await message.reply_text("🚫 No blocklist items set.")
+    def db_operation():
+        conn = get_db()
+        cursor = conn.execute(
+            "SELECT triggers, mode FROM blocklist WHERE chat_id = ?",
+            (message.chat.id,)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        
+        if not row:
+            return None, None
+        
+        return json.loads(row["triggers"]), row["mode"] or "warn"
     
-    import json
-    triggers = json.loads(row["triggers"])
-    mode = row["mode"] or "warn"
+    triggers, mode = await loop.run_in_executor(None, db_operation)
     
     if not triggers:
         return await message.reply_text("🚫 No blocklist items set.")
@@ -1153,7 +1174,7 @@ async def show_blocklist(_, message: Message):
     text = f"🚫 **Blocked Triggers ({len(triggers)})**\n\n"
     text += f"Mode: `{mode}`\n\n"
     
-    for i, trigger in enumerate(triggers[:20], 1):  # Show first 20
+    for i, trigger in enumerate(triggers[:20], 1):
         text += f"{i}. `{trigger}`\n"
     
     if len(triggers) > 20:
@@ -1162,44 +1183,49 @@ async def show_blocklist(_, message: Message):
     await message.reply_text(text)
 
 
-@app.on_message(filters.command("setblockmode") & filters.group)
+@app.on_message(filters.command("blockmode") & filters.group)
 @adminsOnly("can_restrict_members")
 async def set_block_mode(_, message: Message):
-    """Set blocklist mode (warn/delete/ban)."""
+    """Set blocklist enforcement mode."""
     if len(message.command) < 2:
         return await message.reply_text(
-            "Usage: /setblockmode <warn|delete|ban>"
+            "Usage: /blockmode [warn|mute|ban|delete]\n\n"
+            "• warn: Warn user and delete message\n"
+            "• mute: Mute user for 5 minutes\n"
+            "• ban: Ban user\n"
+            "• delete: Just delete message"
         )
     
     mode = message.command[1].lower()
-    if mode not in ["warn", "delete", "ban"]:
-        return await message.reply_text("Invalid mode. Use warn, delete, or ban.")
+    if mode not in ["warn", "mute", "ban", "delete"]:
+        return await message.reply_text("Invalid mode. Use: warn, mute, ban, or delete")
     
-    conn = get_db()
-    # Check if blocklist exists for this chat
-    cursor = conn.execute(
-        "SELECT 1 FROM blocklist WHERE chat_id = ?",
-        (message.chat.id,)
-    )
-    exists = cursor.fetchone() is not None
+    loop = asyncio.get_event_loop()
     
-    if exists:
-        # Update existing blocklist with new mode
-        conn.execute(
-            "UPDATE blocklist SET mode = ? WHERE chat_id = ?",
-            (mode, message.chat.id)
+    def db_operation():
+        conn = get_db()
+        cursor = conn.execute(
+            "SELECT chat_id FROM blocklist WHERE chat_id = ?",
+            (message.chat.id,)
         )
-    else:
-        # Create new blocklist with default empty triggers
-        conn.execute(
-            "INSERT INTO blocklist (chat_id, triggers, mode) VALUES (?, ?, ?)",
-            (message.chat.id, "[]", mode)
-        )
+        row = cursor.fetchone()
+        
+        if row:
+            conn.execute(
+                "UPDATE blocklist SET mode = ? WHERE chat_id = ?",
+                (mode, message.chat.id)
+            )
+        else:
+            conn.execute(
+                "INSERT INTO blocklist (chat_id, triggers, mode) VALUES (?, ?, ?)",
+                (message.chat.id, json.dumps([]), mode)
+            )
+        
+        conn.commit()
+        conn.close()
     
-    conn.commit()
-    conn.close()
-    
-    await message.reply_text(f"✅ Blocklist mode set to `{mode}`")
+    await loop.run_in_executor(None, db_operation)
+    await message.reply_text(f"✅ Blocklist mode set to: `{mode}`")
 
 
 @app.on_message(filters.text & ~filters.private)
@@ -1211,65 +1237,53 @@ async def blocklist_watcher(_, message: Message):
     chat_id = message.chat.id
     user = message.from_user
     
-    # Skip if user is admin or sudo
-    if user.id in SUDOERS or user.id == BOT_ID:
+    # Skip admins and sudo
+    if user.id in SUDOERS_SET:
         return
     
-    # Check if user is admin
     try:
         member = await message.chat.get_member(user.id)
-        if member.status in ["creator", "administrator"]:
+        if member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
             return
-    except Exception:
+    except:
         pass
     
-    # Get blocklist for this chat from SQLite
-    conn = get_db()
-    cursor = conn.execute(
-        "SELECT triggers, mode FROM blocklist WHERE chat_id = ?",
-        (chat_id,)
-    )
-    row = cursor.fetchone()
+    # Get blocklist from SQLite (async)
+    loop = asyncio.get_event_loop()
     
-    if not row or not row["triggers"]:
+    def db_operation():
+        conn = get_db()
+        cursor = conn.execute(
+            "SELECT triggers, mode FROM blocklist WHERE chat_id = ?",
+            (chat_id,)
+        )
+        row = cursor.fetchone()
         conn.close()
-        return
+        
+        if not row:
+            return None, None
+        
+        return json.loads(row["triggers"]), row["mode"] or "warn"
     
-    import json
-    triggers = json.loads(row["triggers"])
-    mode = row["mode"] or "warn"
-    conn.close()
+    triggers, mode = await loop.run_in_executor(None, db_operation)
+    
+    if not triggers:
+        return
     
     text = message.text.lower()
     
-    # Check if message contains any blocked trigger
-    matched_triggers = [t for t in triggers if t in text]
-    
-    if not matched_triggers:
-        return
-    
-    # Take action based on mode
-    if mode == "warn":
-        await message.reply_text(
-            f"⚠️ {user.mention}, your message was deleted because it contained blocked content.\n"
-            f"Blocked words: {', '.join(f'`{t}`' for t in matched_triggers)}"
-        )
-        await message.delete()
-    
-    elif mode == "delete":
-        await message.delete()
-    
-    elif mode == "ban":
-        try:
-            await message.chat.ban_member(user.id)
-            await message.reply_text(
-                f"🚫 {user.mention} was banned for using blocked content.\n"
-                f"Blocked words: {', '.join(f'`{t}`' for t in matched_triggers)}"
-            )
-        except Exception as e:
-            await message.reply_text("I don't have permission to ban users here.")
-        
-        await message.delete()
+    # Check each trigger
+    for trigger in triggers:
+        if " " in trigger:
+            # Phrase - exact substring match
+            if trigger in text:
+                await enforce_blocklist(message, trigger, mode)
+                break
+        else:
+            # Word - word boundary match
+            if re.search(rf"\b{re.escape(trigger)}\b", text):
+                await enforce_blocklist(message, trigger, mode)
+                break
 
 
 async def enforce_blocklist(message: Message, trigger: str, mode: str):
@@ -1287,24 +1301,11 @@ async def enforce_blocklist(message: Message, trigger: str, mode: str):
     asyncio.create_task(delete_after_delay(msg, 15))
     
     if mode == "warn":
-        # Get current warning count
-        current_warn = await get_warn(message.chat.id, await int_to_alpha(message.from_user.id))
-        warns = (current_warn["warns"] if current_warn else 0) + 1
-        
-        # Update warning count
         await add_warn(
             message.chat.id,
             await int_to_alpha(message.from_user.id),
-            {"warns": warns},
+            {"warns": 1},
         )
-        
-        # Auto-ban after 3 warnings
-        if warns >= 3:
-            try:
-                await message.chat.ban_member(message.from_user.id)
-                await message.chat.send_message(f"🚫 {message.from_user.mention} was banned for reaching 3 warnings!")
-            except Exception:
-                pass
     elif mode == "mute":
         await message.chat.restrict_member(
             message.from_user.id,

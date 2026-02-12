@@ -7,7 +7,6 @@ from deep_translator import GoogleTranslator
 
 # Initialize optional imports
 DEEPL_API = None
-translate_col = None
 
 try:
     from wbb import DEEPL_API as DEEPL_KEY
@@ -17,11 +16,7 @@ try:
 except Exception as e:
     print(f"[WARNING] DeepL not available: {e}")
 
-try:
-    from wbb.core.storage import db
-    translate_col = db.translate_history
-except Exception as e:
-    print(f"[WARNING] Storage backend not available: {e}")
+from wbb.utils.dbfunctions import save_translation_history
 
 __MODULE__ = "Translate"
 __HELP__ = """
@@ -179,7 +174,7 @@ async def translate_command(client, message: Message):
             return await msg.edit_text(f"❌ {error_msg}")
 
         # Save to history
-        await save_translation(
+        await save_translation_history(
             message.from_user.id,
             text,
             translated,

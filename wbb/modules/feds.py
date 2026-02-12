@@ -5,6 +5,7 @@
 import asyncio
 import uuid
 import html
+import logging
 
 from pyrogram import filters
 from pyrogram.enums import ChatMemberStatus, ChatType, ParseMode
@@ -13,9 +14,10 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from wbb import BOT_ID, LOG_GROUP_ID, SUDOERS, app
 from wbb.core.decorators.errors import capture_err
-from wbb.core.storage import db
 from wbb.utils.dbfeds import *
 from wbb.utils.functions import extract_user, extract_user_and_reason
+
+log = logging.getLogger(__name__)
 
 __MODULE__ = "Federation"
 __HELP__ = """

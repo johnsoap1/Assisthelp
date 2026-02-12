@@ -20,7 +20,11 @@ from wbb.core.keyboard import ikb
 from wbb.modules.admin import member_permissions
 from wbb.modules.greetings import handle_new_member, send_welcome_message
 
-approvaldb = db.autoapprove
+from wbb.utils.dbfunctions import (
+    get_autoapprove, set_autoapprove, update_autoapprove, delete_autoapprove,
+    add_pending_user, remove_pending_user, clear_pending_users, 
+    get_pending_users, increment_approval_stat
+)
 
 __MODULE__ = "Autoapprove"
 __HELP__ = """
@@ -62,12 +66,12 @@ Automatically or manually approve chat join requests.
 async def approval_command(client, message):
     """Toggle autoapprove on/off and show status."""
     chat_id = message.chat.id
-    chat = await approvaldb.find_one({"chat_id": chat_id})
+    chat_data = await get_autoapprove(chat_id)
     
-    if chat:
-        mode = chat.get("mode", "automatic")
-        settings = chat.get("settings", {})
-        stats = chat.get("stats", {})
+    if chat_data:
+        mode = chat_data.get("mode", "automatic")
+        settings = chat_data.get("settings", {})
+        stats = chat_data.get("stats", {})
         
         # Mode buttons
         if mode == "automatic":
@@ -87,7 +91,7 @@ async def approval_command(client, message):
         # Get stats
         total_approved = stats.get('total_approved', 0)
         total_declined = stats.get('total_declined', 0)
-        pending_count = len(chat.get('pending_users', []))
+        pending_count = len(await get_pending_users(chat_id))
         
         await message.reply(
             f"✅ **Autoapproval Status: ENABLED**\n\n"
@@ -132,11 +136,7 @@ async def change_mode(client, message):
             "❌ Invalid mode. Choose: `automatic`, `manual`, or `verify`"
         )
     
-    await approvaldb.update_one(
-        {"chat_id": chat_id},
-        {"$set": {"mode": mode}},
-        upsert=True
-    )
+    await update_autoapprove(chat_id, mode=mode)
     
     await message.reply_text(
         f"✅ Approval mode changed to **{mode.title()}**"
@@ -148,23 +148,22 @@ async def change_mode(client, message):
 async def show_pending(client, message):
     """Show all pending join requests."""
     chat_id = message.chat.id
-    chat = await approvaldb.find_one({"chat_id": chat_id})
+    pending_users = await get_pending_users(chat_id)
     
-    if not chat or not chat.get('pending_users'):
+    if not pending_users:
         return await message.reply_text("📝 No pending join requests.")
     
-    pending = chat['pending_users']
-    msg = f"📋 **Pending Join Requests** ({len(pending)})\n\n"
+    msg = f"📋 **Pending Join Requests** ({len(pending_users)})\n\n"
     
-    for user_id in pending[:10]:  # Show first 10
+    for user_id in pending_users[:10]:  # Show first 10
         try:
             user = await app.get_users(user_id)
             msg += f"• {user.mention} (`{user_id}`)\n"
         except:
             msg += f"• User `{user_id}`\n"
     
-    if len(pending) > 10:
-        msg += f"\n... and {len(pending) - 10} more"
+    if len(pending_users) > 10:
+        msg += f"\n... and {len(pending_users) - 10} more"
     
     buttons = ikb({
         "✅ Approve All": "approval_approve_all",
@@ -179,16 +178,15 @@ async def show_pending(client, message):
 async def approve_all_pending(client, message):
     """Approve all pending requests."""
     chat_id = message.chat.id
-    chat = await approvaldb.find_one({"chat_id": chat_id})
+    pending_users = await get_pending_users(chat_id)
     
-    if not chat or not chat.get('pending_users'):
+    if not pending_users:
         return await message.reply_text("📝 No pending requests to approve.")
     
-    pending = chat['pending_users']
-    progress = await message.reply_text(f"⏳ Approving {len(pending)} requests...")
+    progress = await message.reply_text(f"⏳ Approving {len(pending_users)} requests...")
     
     approved = 0
-    for user_id in pending:
+    for user_id in pending_users:
         try:
             await app.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
             approved += 1
@@ -196,15 +194,10 @@ async def approve_all_pending(client, message):
             pass
     
     # Clear pending and update stats
-    await approvaldb.update_one(
-        {"chat_id": chat_id},
-        {
-            "$set": {"pending_users": []},
-            "$inc": {"stats.total_approved": approved}
-        }
-    )
+    await clear_pending_users(chat_id)
+    await increment_approval_stat(chat_id, "total_approved")
     
-    await progress.edit_text(f"✅ Approved {approved}/{len(pending)} requests!")
+    await progress.edit_text(f"✅ Approved {approved}/{len(pending_users)} requests!")
 
 
 @app.on_message(filters.command("decline_all") & filters.chat(ChatType.GROUP))
@@ -212,16 +205,15 @@ async def approve_all_pending(client, message):
 async def decline_all_pending(client, message):
     """Decline all pending requests."""
     chat_id = message.chat.id
-    chat = await approvaldb.find_one({"chat_id": chat_id})
+    pending_users = await get_pending_users(chat_id)
     
-    if not chat or not chat.get('pending_users'):
+    if not pending_users:
         return await message.reply_text("📝 No pending requests to decline.")
     
-    pending = chat['pending_users']
-    progress = await message.reply_text(f"⏳ Declining {len(pending)} requests...")
+    progress = await message.reply_text(f"⏳ Declining {len(pending_users)} requests...")
     
     declined = 0
-    for user_id in pending:
+    for user_id in pending_users:
         try:
             await app.decline_chat_join_request(chat_id=chat_id, user_id=user_id)
             declined += 1
@@ -229,15 +221,10 @@ async def decline_all_pending(client, message):
             pass
     
     # Clear pending and update stats
-    await approvaldb.update_one(
-        {"chat_id": chat_id},
-        {
-            "$set": {"pending_users": []},
-            "$inc": {"stats.total_declined": declined}
-        }
-    )
+    await clear_pending_users(chat_id)
+    await increment_approval_stat(chat_id, "total_declined")
     
-    await progress.edit_text(f"❌ Declined {declined}/{len(pending)} requests!")
+    await progress.edit_text(f"❌ Declined {declined}/{len(pending_users)} requests!")
 
 
 @app.on_message(filters.command("clear_pending") & filters.chat(ChatType.GROUP))
@@ -245,15 +232,9 @@ async def decline_all_pending(client, message):
 async def clear_pending_command(client, message):
     """Clear pending user list (allows re-requesting)."""
     chat_id = message.chat.id
-    result = await approvaldb.update_one(
-        {"chat_id": chat_id},
-        {"$set": {"pending_users": []}},
-    )
+    await clear_pending_users(chat_id)
     
-    if result.modified_count > 0:
-        await message.reply_text("✅ Cleared pending users list.")
-    else:
-        await message.reply_text("📝 No pending users to clear.")
+    await message.reply_text("✅ Cleared pending users list.")
 
 
 @app.on_callback_query(filters.regex("approval(.*)"))
@@ -276,13 +257,12 @@ async def approval_callbacks(client, cb):
     option = command_parts[1] if len(command_parts) > 1 else command_parts[0][8:]
     
     if option == "off":
-        if await approvaldb.count_documents({"chat_id": chat_id}) > 0:
-            await approvaldb.delete_one({"chat_id": chat_id})
-            buttons = ikb({"✅ Turn ON": "approval_on"}, 1)
-            return await cb.edit_message_text(
-                "❌ **Autoapproval: DISABLED**",
-                reply_markup=buttons
-            )
+        await delete_autoapprove(chat_id)
+        buttons = ikb({"✅ Turn ON": "approval_on"}, 1)
+        return await cb.edit_message_text(
+            "❌ **Autoapproval: DISABLED**",
+            reply_markup=buttons
+        )
     
     elif option == "on":
         mode = "automatic"
@@ -308,11 +288,7 @@ async def approval_callbacks(client, cb):
         return
     
     # Update mode
-    await approvaldb.update_one(
-        {"chat_id": chat_id},
-        {"$set": {"mode": mode}},
-        upsert=True
-    )
+    await update_autoapprove(chat_id, mode=mode)
     
     await cb.answer(f"✅ Mode changed to {mode.title()}", show_alert=False)
     await cb.message.delete()
@@ -322,8 +298,8 @@ async def approval_callbacks(client, cb):
 async def show_approval_settings(message):
     """Show approval filter settings."""
     chat_id = message.chat.id
-    chat = await approvaldb.find_one({"chat_id": chat_id})
-    settings = chat.get('settings', {}) if chat else {}
+    chat_data = await get_autoapprove(chat_id)
+    settings = chat_data.get("settings", {}) if chat_data else {}
     
     min_age = settings.get('min_account_age_days', 0)
     require_username = settings.get('require_username', False)
@@ -356,17 +332,17 @@ async def show_approval_settings(message):
 async def show_approval_stats(message):
     """Show approval statistics."""
     chat_id = message.chat.id
-    chat = await approvaldb.find_one({"chat_id": chat_id})
+    chat_data = await get_autoapprove(chat_id)
     
-    if not chat:
+    if not chat_data:
         return await message.reply_text("📊 No statistics available yet.")
     
-    stats = chat.get('stats', {})
+    stats = chat_data.get('stats', {})
     
     total_approved = stats.get('total_approved', 0)
     total_declined = stats.get('total_declined', 0)
     total_spam = stats.get('spam_blocked', 0)
-    pending = len(chat.get('pending_users', []))
+    pending = len(await get_pending_users(chat_id))
     
     await message.reply_text(
         f"📊 **Approval Statistics**\n\n"
@@ -407,7 +383,7 @@ async def handle_join_request(client, request: ChatJoinRequest):
     user = request.from_user
     chat_id = chat.id
     
-    chat_data = await approvaldb.find_one({"chat_id": chat_id})
+    chat_data = await get_autoapprove(chat_id)
     if not chat_data:
         return  # Autoapproval not enabled
     
@@ -418,10 +394,7 @@ async def handle_join_request(client, request: ChatJoinRequest):
     if settings.get('spam_check', True) and is_spam_pattern(user):
         try:
             await app.decline_chat_join_request(chat_id=chat_id, user_id=user.id)
-            await approvaldb.update_one(
-                {"chat_id": chat_id},
-                {"$inc": {"stats.spam_blocked": 1}}
-            )
+            await increment_approval_stat(chat_id, "spam_blocked")
         except:
             pass
         return
@@ -446,10 +419,7 @@ async def handle_join_request(client, request: ChatJoinRequest):
     if mode == "automatic":
         try:
             await app.approve_chat_join_request(chat_id=chat.id, user_id=user.id)
-            await approvaldb.update_one(
-                {"chat_id": chat_id},
-                {"$inc": {"stats.total_approved": 1}}
-            )
+            await increment_approval_stat(chat_id, "total_approved")
             await handle_new_member(user, chat)
         except Exception as e:
             print(f"[AutoApprove] Error auto-approving: {e}")
@@ -458,10 +428,7 @@ async def handle_join_request(client, request: ChatJoinRequest):
         # Auto-approve but send verification button
         try:
             await app.approve_chat_join_request(chat_id=chat.id, user_id=user.id)
-            await approvaldb.update_one(
-                {"chat_id": chat_id},
-                {"$inc": {"stats.total_approved": 1}}
-            )
+            await increment_approval_stat(chat_id, "total_approved")
             
             buttons = ikb({
                 "✅ I'm Human": f"verify_{user.id}"
@@ -478,16 +445,8 @@ async def handle_join_request(client, request: ChatJoinRequest):
     
     elif mode == "manual":
         # Check if already pending
-        is_pending = await approvaldb.count_documents(
-            {"chat_id": chat.id, "pending_users": int(user.id)}
-        )
-        
-        if is_pending == 0:
-            await approvaldb.update_one(
-                {"chat_id": chat.id},
-                {"$addToSet": {"pending_users": int(user.id)}},
-                upsert=True
-            )
+        if not await is_autoapprove_pending(chat_id, user.id):
+            await add_pending_user(chat_id, user.id)
             
             buttons = ikb({
                 "✅ Accept": f"manual_approve_{user.id}",
@@ -544,24 +503,15 @@ async def manual_approval_callback(app, cb):
     try:
         if action == "approve":
             await app.approve_chat_join_request(chat_id=chat.id, user_id=user_id)
-            await approvaldb.update_one(
-                {"chat_id": chat.id},
-                {"$inc": {"stats.total_approved": 1}}
-            )
+            await increment_approval_stat(chat.id, "total_approved")
             status = "✅ Approved"
         else:
             await app.decline_chat_join_request(chat_id=chat.id, user_id=user_id)
-            await approvaldb.update_one(
-                {"chat_id": chat.id},
-                {"$inc": {"stats.total_declined": 1}}
-            )
+            await increment_approval_stat(chat.id, "total_declined")
             status = "❌ Declined"
         
         # Remove from pending
-        await approvaldb.update_one(
-            {"chat_id": chat.id},
-            {"$pull": {"pending_users": user_id}}
-        )
+        await remove_pending_user(chat.id, user_id)
         
         await cb.answer(f"{status} by {from_user.first_name}", show_alert=False)
         await cb.message.delete()
@@ -580,3 +530,49 @@ async def verify_callback(app, cb):
     
     await cb.answer("✅ Verification complete! Welcome!", show_alert=False)
     await cb.message.delete()
+
+
+# Settings callbacks
+@app.on_callback_query(filters.regex("approval_set_(.*)"))
+async def approval_settings_callback(client, cb):
+    """Handle approval settings changes."""
+    chat_id = cb.message.chat.id
+    from_user = cb.from_user
+    
+    # Check permissions
+    permissions = await member_permissions(chat_id, from_user.id)
+    if "can_change_info" not in permissions:
+        if from_user.id not in SUDOERS:
+            return await cb.answer(
+                "❌ You need 'can_change_info' permission!",
+                show_alert=True
+            )
+    
+    setting = cb.data.split("_", 2)[2]
+    
+    chat_data = await get_autoapprove(chat_id)
+    settings = chat_data.get("settings", {}) if chat_data else {}
+    
+    if setting == "age":
+        # Handle age setting - this would need a separate input
+        await cb.answer("Use /setapprovalage [days] to set minimum account age", show_alert=True)
+        return
+    elif setting == "username":
+        settings['require_username'] = not settings.get('require_username', False)
+    elif setting == "photo":
+        settings['require_photo'] = not settings.get('require_photo', False)
+    elif setting == "bio":
+        settings['require_bio'] = not settings.get('require_bio', False)
+    elif setting == "spam":
+        settings['spam_check'] = not settings.get('spam_check', True)
+    elif setting == "back":
+        await cb.message.delete()
+        await approval_command(client, cb.message)
+        return
+    
+    # Update settings
+    await update_autoapprove(chat_id, settings=settings)
+    
+    await cb.answer("✅ Setting updated!", show_alert=False)
+    await cb.message.delete()
+    await show_approval_settings(cb.message)

@@ -60,17 +60,48 @@ log = Log(True, "bot.log")
 async def load_sudoers():
     global SUDOERS, SUDOERS_SET
     log.info("Loading sudoers from DB")
-    sudoers_db = db.sudoers
-    sudoers_doc = await sudoers_db.find_one({"sudo": "sudo"})
-    sudoers_list = sudoers_doc["sudoers"] if sudoers_doc else []
-
+    
+    # SQLite version - we need to create the table first
+    import sqlite3
+    from pathlib import Path
+    import json
+    
+    conn = sqlite3.connect(Path("wbb.sqlite"))
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sudoers (
+            id INTEGER PRIMARY KEY,
+            sudo TEXT DEFAULT 'sudo',
+            data TEXT
+        )
+    """)
+    
+    cursor = conn.execute("SELECT data FROM sudoers WHERE sudo = 'sudo'")
+    row = cursor.fetchone()
+    
+    if row:
+        try:
+            sudoers_data = json.loads(row[0])
+            sudoers_list = sudoers_data.get("sudoers", [])
+        except:
+            sudoers_list = []
+    else:
+        sudoers_list = []
+    
+    # Add default sudoers from config
     for user_id in SUDO_USERS_ID:
         if user_id not in sudoers_list:
             sudoers_list.append(user_id)
-            await sudoers_db.update_one(
-                {"sudo": "sudo"}, {"$set": {"sudoers": sudoers_list}}, upsert=True
-            )
-
+    
+    # Save updated sudoers list
+    sudoers_data = {"sudoers": sudoers_list}
+    conn.execute("""
+        INSERT OR REPLACE INTO sudoers (sudo, data)
+        VALUES ('sudo', ?)
+    """, (json.dumps(sudoers_data),))
+    
+    conn.commit()
+    conn.close()
+    
     SUDOERS_SET = set(sudoers_list)
     SUDOERS = filters.user(list(SUDOERS_SET))
     log.info(f"Loaded SUDOERS: {SUDOERS_SET}")

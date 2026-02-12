@@ -29,20 +29,11 @@ from pyrogram.types import Message
 from pyrogram.enums import ChatMemberStatus
 from wbb import app, SUDOERS, SUDOERS_SET
 
-try:
-    from wbb.core.storage import db
-    dedupe_settings_col = db.dedupe_settings
-    media_hashes_col = db.media_hashes
-    user_media_stats_col = db.user_media_stats
-except Exception as e:
-    print(f"[DEDUPE] Storage not available: {e}")
-    dedupe_settings_col = None
-    media_hashes_col = None
-    user_media_stats_col = None
-    # Fallback in-memory storage
-    memory_dedupe = {}
-    memory_hashes = {}
-    memory_stats = {}
+from wbb.utils.dbfunctions import (
+    is_dedupe_enabled, set_dedupe_enabled, check_duplicate_media, save_media_hash,
+    increment_user_media, get_user_media_stats, get_media_leaderboard,
+    get_inactive_media_users, get_low_media_users, get_chat_media_stats
+)
 
 __MODULE__ = "Media Dedupe"
 __HELP__ = """
@@ -166,230 +157,6 @@ async def is_admin_or_sudo(chat_id: int, user_id: int) -> bool:
     except:
         return False
 
-# ==================== DATABASE FUNCTIONS ====================
-
-async def is_dedupe_enabled(chat_id: int) -> bool:
-    """Check if deduplication is enabled for chat."""
-    if dedupe_settings_col is None:
-        return memory_dedupe.get(chat_id, {}).get("enabled", False)
-    
-    doc = await dedupe_settings_col.find_one({"chat_id": chat_id})
-    return doc.get("enabled", False) if doc else False
-
-async def set_dedupe_enabled(chat_id: int, enabled: bool):
-    """Enable or disable deduplication for chat."""
-    if dedupe_settings_col is None:
-        if chat_id not in memory_dedupe:
-            memory_dedupe[chat_id] = {}
-        memory_dedupe[chat_id]["enabled"] = enabled
-        return
-    
-    await dedupe_settings_col.update_one(
-        {"chat_id": chat_id},
-        {"$set": {"enabled": enabled, "updated_at": int(time.time())}},
-        upsert=True
-    )
-
-async def check_duplicate_media(chat_id: int, file_hash: str) -> Optional[Dict]:
-    """Check if media hash exists in chat."""
-    if media_hashes_col is None:
-        key = f"{chat_id}:{file_hash}"
-        return memory_hashes.get(key)
-    
-    return await media_hashes_col.find_one({
-        "chat_id": chat_id,
-        "file_hash": file_hash
-    })
-
-async def save_media_hash(chat_id: int, file_hash: str, user_id: int, message_id: int):
-    """Save media hash to prevent duplicates."""
-    if media_hashes_col is None:
-        key = f"{chat_id}:{file_hash}"
-        memory_hashes[key] = {
-            "chat_id": chat_id,
-            "file_hash": file_hash,
-            "user_id": user_id,
-            "message_id": message_id,
-            "timestamp": int(time.time())
-        }
-        return
-    
-    await media_hashes_col.insert_one({
-        "chat_id": chat_id,
-        "file_hash": file_hash,
-        "user_id": user_id,
-        "message_id": message_id,
-        "timestamp": int(time.time())
-    })
-
-async def increment_user_media(chat_id: int, user_id: int, media_type: str):
-    """Increment user's media count."""
-    if user_media_stats_col is None:
-        key = f"{chat_id}:{user_id}"
-        if key not in memory_stats:
-            memory_stats[key] = {
-                "chat_id": chat_id,
-                "user_id": user_id,
-                "photos": 0,
-                "videos": 0,
-                "total": 0,
-                "last_media": int(time.time())
-            }
-        
-        if media_type == "photo":
-            memory_stats[key]["photos"] += 1
-        elif media_type == "video":
-            memory_stats[key]["videos"] += 1
-        memory_stats[key]["total"] += 1
-        memory_stats[key]["last_media"] = int(time.time())
-        return
-    
-    update_data = {
-        "last_media": int(time.time())
-    }
-    
-    if media_type == "photo":
-        update_data["$inc"] = {"photos": 1, "total": 1}
-    elif media_type == "video":
-        update_data["$inc"] = {"videos": 1, "total": 1}
-    
-    await user_media_stats_col.update_one(
-        {"chat_id": chat_id, "user_id": user_id},
-        {
-            "$set": {"last_media": int(time.time())},
-            "$inc": {
-                "photos" if media_type == "photo" else "videos": 1,
-                "total": 1
-            }
-        },
-        upsert=True
-    )
-
-async def get_user_stats(chat_id: int, user_id: int) -> Dict:
-    """Get user's media statistics."""
-    if user_media_stats_col is None:
-        key = f"{chat_id}:{user_id}"
-        return memory_stats.get(key, {
-            "photos": 0,
-            "videos": 0,
-            "total": 0,
-            "last_media": 0
-        })
-    
-    doc = await user_media_stats_col.find_one({
-        "chat_id": chat_id,
-        "user_id": user_id
-    })
-    
-    if not doc:
-        return {"photos": 0, "videos": 0, "total": 0, "last_media": 0}
-    
-    return {
-        "photos": doc.get("photos", 0),
-        "videos": doc.get("videos", 0),
-        "total": doc.get("total", 0),
-        "last_media": doc.get("last_media", 0)
-    }
-
-async def get_leaderboard(chat_id: int, limit: int = 10) -> List[Dict]:
-    """Get top media contributors."""
-    if user_media_stats_col is None:
-        # Filter and sort in-memory stats
-        chat_stats = [
-            v for k, v in memory_stats.items()
-            if k.startswith(f"{chat_id}:")
-        ]
-        chat_stats.sort(key=lambda x: x.get("total", 0), reverse=True)
-        return chat_stats[:limit]
-    
-    cursor = user_media_stats_col.find(
-        {"chat_id": chat_id, "total": {"$gt": 0}}
-    ).sort("total", -1).limit(limit)
-    
-    return await cursor.to_list(limit)
-
-async def get_inactive_users(chat_id: int, inactive_seconds: int) -> List[int]:
-    """Get list of user IDs inactive for specified time."""
-    cutoff_time = int(time.time()) - inactive_seconds
-    
-    if user_media_stats_col is None:
-        # Get users from memory who haven't posted recently
-        inactive = []
-        for key, stats in memory_stats.items():
-            if key.startswith(f"{chat_id}:"):
-                last_media = stats.get("last_media", 0)
-                if last_media == 0 or last_media < cutoff_time:
-                    inactive.append(stats["user_id"])
-        return inactive
-    
-    cursor = user_media_stats_col.find({
-        "chat_id": chat_id,
-        "$or": [
-            {"last_media": {"$lt": cutoff_time}},
-            {"last_media": {"$exists": False}}
-        ]
-    })
-    
-    docs = await cursor.to_list(None)
-    return [doc["user_id"] for doc in docs]
-
-async def get_low_media_users(chat_id: int, threshold: int) -> List[int]:
-    """Get users with media count below threshold."""
-    if user_media_stats_col is None:
-        low_media = []
-        for key, stats in memory_stats.items():
-            if key.startswith(f"{chat_id}:"):
-                if stats.get("total", 0) < threshold:
-                    low_media.append(stats["user_id"])
-        return low_media
-    
-    cursor = user_media_stats_col.find({
-        "chat_id": chat_id,
-        "$or": [
-            {"total": {"$lt": threshold}},
-            {"total": {"$exists": False}}
-        ]
-    })
-    
-    docs = await cursor.to_list(None)
-    return [doc["user_id"] for doc in docs]
-
-async def get_chat_stats(chat_id: int) -> Dict:
-    """Get overall chat statistics."""
-    if user_media_stats_col is None:
-        total_photos = 0
-        total_videos = 0
-        total_users = 0
-        
-        for key, stats in memory_stats.items():
-            if key.startswith(f"{chat_id}:"):
-                total_photos += stats.get("photos", 0)
-                total_videos += stats.get("videos", 0)
-                if stats.get("total", 0) > 0:
-                    total_users += 1
-        
-        return {
-            "total_photos": total_photos,
-            "total_videos": total_videos,
-            "total_media": total_photos + total_videos,
-            "active_users": total_users
-        }
-    
-    # Aggregate stats from database
-    cursor = user_media_stats_col.find({"chat_id": chat_id})
-    docs = await cursor.to_list(None)
-    
-    total_photos = sum(doc.get("photos", 0) for doc in docs)
-    total_videos = sum(doc.get("videos", 0) for doc in docs)
-    active_users = sum(1 for doc in docs if doc.get("total", 0) > 0)
-    
-    return {
-        "total_photos": total_photos,
-        "total_videos": total_videos,
-        "total_media": total_photos + total_videos,
-        "active_users": active_users
-    }
-
 # ==================== MESSAGE HANDLERS ====================
 
 @app.on_message(filters.group & (filters.photo | filters.video))
@@ -502,7 +269,7 @@ async def my_count_command(_, message: Message):
     user_id = message.from_user.id
     chat_id = message.chat.id
     
-    stats = await get_user_stats(chat_id, user_id)
+    stats = await get_user_media_stats(chat_id, user_id)
     
     if stats["total"] == 0:
         await message.reply_text(
@@ -551,7 +318,7 @@ async def count_command(_, message: Message):
     if not target_user:
         return await message.reply_text("❌ Could not find user!")
     
-    stats = await get_user_stats(message.chat.id, target_user.id)
+    stats = await get_user_media_stats(message.chat.id, target_user.id)
     
     last_media = format_time_ago(stats["last_media"]) if stats["last_media"] else "Never"
     
@@ -578,7 +345,7 @@ async def leaderboard_command(_, message: Message):
             return
     
     limit = 20 if show_full else 10
-    leaders = await get_leaderboard(message.chat.id, limit)
+    leaders = await get_media_leaderboard(message.chat.id, limit)
     
     if not leaders:
         await message.reply_text(
@@ -607,7 +374,7 @@ async def leaderboard_command(_, message: Message):
         text += f"   📊 {total} total (📷 {photos} • 🎬 {videos})\n\n"
     
     # Add footer
-    chat_stats = await get_chat_stats(message.chat.id)
+    chat_stats = await get_chat_media_stats(message.chat.id)
     text += f"━━━━━━━━━━━━━━━\n"
     text += f"📈 Total: {chat_stats['total_media']} media\n"
     text += f"👥 Active users: {chat_stats['active_users']}"
@@ -623,7 +390,7 @@ async def media_stats_command(_, message: Message):
     if not await is_admin_or_sudo(message.chat.id, message.from_user.id):
         return await message.reply_text("❌ This command is for admins only!")
     
-    stats = await get_chat_stats(message.chat.id)
+    stats = await get_chat_media_stats(message.chat.id)
     dedupe_enabled = await is_dedupe_enabled(message.chat.id)
     
     dedupe_status = "✅ Enabled" if dedupe_enabled else "❌ Disabled"
@@ -741,7 +508,7 @@ async def inactive_kick_command(_, message: Message):
     )
     
     # Get inactive users
-    inactive_users = await get_inactive_users(message.chat.id, inactive_seconds)
+    inactive_users = await get_inactive_media_users(message.chat.id, inactive_seconds)
     
     if not inactive_users:
         return await msg.edit_text(
@@ -808,7 +575,7 @@ async def scan_inactive_command(_, message: Message):
     
     msg = await message.reply_text(f"🔍 Scanning...")
     
-    inactive_users = await get_inactive_users(message.chat.id, inactive_seconds)
+    inactive_users = await get_inactive_media_users(message.chat.id, inactive_seconds)
     
     if not inactive_users:
         return await msg.edit_text(f"✅ No inactive users found for {time_str}")
