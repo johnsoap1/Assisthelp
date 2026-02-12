@@ -1225,146 +1225,192 @@ async def get_chat_triggers_db(chat_id: int, include_global: bool = True) -> lis
 
 
 async def record_trigger_usage_db(chat_id: int, trigger: str):
-    """Record trigger usage for statistics."""
     trigger_lower = trigger.lower()
+    conn = get_db()
     
-    # Update trigger usage count
-    await async_db(
-        "UPDATE triggers SET usage_count = usage_count + 1 WHERE chat_id = ? AND trigger = ?",
+    cursor = conn.execute(
+        "SELECT count FROM trigger_stats WHERE chat_id = ? AND trigger = ?",
         (chat_id, trigger_lower)
     )
-    
-    # Update or insert stats
-    result = await async_db(
-        "SELECT count FROM trigger_stats WHERE chat_id = ? AND trigger = ?",
-        (chat_id, trigger_lower),
-        fetchone=True
-    )
+    result = cursor.fetchone()
     
     if result:
-        await async_db(
+        conn.execute(
             "UPDATE trigger_stats SET count = count + 1, last_used = ? WHERE chat_id = ? AND trigger = ?",
             (int(time.time()), chat_id, trigger_lower)
         )
     else:
-        await async_db(
+        conn.execute(
             "INSERT INTO trigger_stats (chat_id, trigger, count, last_used) VALUES (?, ?, ?, ?)",
             (chat_id, trigger_lower, 1, int(time.time()))
         )
+    
+    conn.commit()
+    conn.close()
 
 
 # Gban functions
-async def add_gban_user(user_id: int):
+@async_db
+def add_gban_user(user_id: int):
     """Add user to global ban list."""
-    await async_db(
+    conn = get_db()
+    conn.execute(
         "INSERT OR IGNORE INTO gbans (user_id, banned_at) VALUES (?, ?)",
         (user_id, int(time.time()))
     )
+    conn.commit()
+    conn.close()
 
 
-async def remove_gban_user(user_id: int):
+@async_db
+def remove_gban_user(user_id: int):
     """Remove user from global ban list."""
-    await async_db("DELETE FROM gbans WHERE user_id = ?", (user_id,))
+    conn = get_db()
+    conn.execute("DELETE FROM gbans WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
 
 
-async def is_gbanned_user(user_id: int) -> bool:
+@async_db
+def is_gbanned_user(user_id: int) -> bool:
     """Check if user is globally banned."""
-    result = await async_db(
+    conn = get_db()
+    cursor = conn.execute(
         "SELECT user_id FROM gbans WHERE user_id = ?",
-        (user_id,),
-        fetchone=True
+        (user_id,)
     )
-    return bool(result)
+    row = cursor.fetchone()
+    conn.close()
+    return bool(row)
 
 
 # Statistics functions
-async def get_served_chats() -> list:
+@async_db
+def get_served_chats() -> list:
     """Get list of served chat IDs."""
-    results = await async_db(
-        "SELECT DISTINCT chat_id FROM chat_members WHERE left_date IS NULL",
-        fetchall=True
+    conn = get_db()
+    cursor = conn.execute(
+        "SELECT DISTINCT chat_id FROM chat_members WHERE left_date IS NULL"
     )
+    results = cursor.fetchall()
+    conn.close()
     return [row[0] for row in results]
 
 
-async def get_served_users() -> list:
+@async_db
+def get_served_users() -> list:
     """Get list of served user IDs."""
-    results = await async_db(
-        "SELECT DISTINCT user_id FROM chat_members WHERE left_date IS NULL",
-        fetchall=True
+    conn = get_db()
+    cursor = conn.execute(
+        "SELECT DISTINCT user_id FROM chat_members WHERE left_date IS NULL"
     )
+    results = cursor.fetchall()
+    conn.close()
     return [row[0] for row in results]
 
 
 # Blacklist functions
-async def get_blacklisted_words(chat_id: int) -> list:
+@async_db
+def get_blacklisted_words(chat_id: int) -> list:
     """Get all blacklisted words for a chat."""
-    results = await async_db(
+    conn = get_db()
+    cursor = conn.execute(
         "SELECT word FROM blacklist WHERE chat_id = ? AND word IS NOT NULL",
-        (chat_id,),
-        fetchall=True
+        (chat_id,)
     )
+    results = cursor.fetchall()
+    conn.close()
     return [row[0] for row in results]
 
 
-async def save_blacklist_filter(chat_id: int, word: str):
+@async_db
+def save_blacklist_filter(chat_id: int, word: str):
     """Add a word to blacklist."""
-    await async_db(
+    conn = get_db()
+    conn.execute(
         "INSERT OR IGNORE INTO blacklist (chat_id, word) VALUES (?, ?)",
         (chat_id, word.lower())
     )
+    conn.commit()
+    conn.close()
 
 
-async def delete_blacklist_filter(chat_id: int, word: str) -> bool:
+@async_db
+def delete_blacklist_filter(chat_id: int, word: str) -> bool:
     """Remove a word from blacklist."""
-    result = await async_db(
+    conn = get_db()
+    cursor = conn.execute(
         "DELETE FROM blacklist WHERE chat_id = ? AND word = ?",
         (chat_id, word.lower())
     )
-    return result > 0
+    result = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return result
 
 
-async def get_blacklist_settings(chat_id: int) -> dict:
+@async_db
+def get_blacklist_settings(chat_id: int) -> dict:
     """Get blacklist settings for a chat."""
-    result = await async_db(
+    conn = get_db()
+    cursor = conn.execute(
         "SELECT settings FROM blacklist WHERE chat_id = ? AND word IS NULL",
-        (chat_id,),
-        fetchone=True
+        (chat_id,)
     )
+    row = cursor.fetchone()
+    conn.close()
     
-    if result and result[0]:
-        return json.loads(result[0])
+    if row and row["settings"]:
+        return json.loads(row["settings"])
     return {}
 
 
-async def update_blacklist_settings(chat_id: int, settings: dict):
+@async_db
+def update_blacklist_settings(chat_id: int, settings: dict):
     """Update blacklist settings for a chat."""
     settings_json = json.dumps(settings)
+    conn = get_db()
     
-    await async_db(
-        """INSERT OR REPLACE INTO blacklist (chat_id, word, settings) 
+    conn.execute("""
+        INSERT OR REPLACE INTO blacklist (chat_id, word, settings) 
            VALUES (?, NULL, ?)""",
         (chat_id, settings_json)
     )
+    conn.commit()
+    conn.close()
 
 
-async def get_blacklist_stats(chat_id: int) -> dict:
+@async_db
+def get_blacklist_stats(chat_id: int) -> dict:
     """Get blacklist statistics for a chat."""
-    result = await async_db(
+    conn = get_db()
+    cursor = conn.execute(
         "SELECT stats FROM blacklist WHERE chat_id = ? AND word IS NULL",
-        (chat_id,),
-        fetchone=True
+        (chat_id,)
     )
+    row = cursor.fetchone()
+    conn.close()
     
-    if result and result[0]:
-        return json.loads(result[0])
+    if row and row["stats"]:
+        return json.loads(row["stats"])
     return {}
 
 
-async def update_blacklist_stats(chat_id: int, word: str, user_id: int):
+@async_db
+def update_blacklist_stats(chat_id: int, word: str, user_id: int):
     """Update blacklist trigger statistics."""
     # Get current stats
-    stats = await get_blacklist_stats(chat_id)
+    conn = get_db()
+    cursor = conn.execute(
+        "SELECT stats FROM blacklist WHERE chat_id = ? AND word IS NULL",
+        (chat_id,)
+    )
+    row = cursor.fetchone()
+    
+    if row and row["stats"]:
+        stats = json.loads(row["stats"])
+    else:
+        stats = {}
     
     # Update total triggers
     stats['total_triggers'] = stats.get('total_triggers', 0) + 1
@@ -1382,245 +1428,318 @@ async def update_blacklist_stats(chat_id: int, word: str, user_id: int):
     # Save updated stats - use a separate column for stats
     stats_json = json.dumps(stats)
     
-    await async_db(
-        """INSERT OR REPLACE INTO blacklist (chat_id, word, settings, stats) 
+    conn.execute("""
+        INSERT OR REPLACE INTO blacklist (chat_id, word, settings, stats) 
            VALUES (?, NULL, ?, ?)""",
         (chat_id, json.dumps({}), stats_json)
     )
+    conn.commit()
+    conn.close()
 
 
 # Blacklist chat functions
-async def blacklist_chat(chat_id: int) -> bool:
+@async_db
+def blacklist_chat(chat_id: int) -> bool:
     """Add a chat to blacklist."""
-    try:
-        await async_db(
-            "INSERT OR IGNORE INTO blacklisted_chats (chat_id) VALUES (?)",
-            (chat_id,)
-        )
-        return True
-    except:
-        return False
+    conn = get_db()
+    conn.execute(
+        "INSERT OR IGNORE INTO blacklisted_chats (chat_id) VALUES (?)",
+        (chat_id,)
+    )
+    conn.commit()
+    conn.close()
+    return True
 
 
-async def whitelist_chat(chat_id: int) -> bool:
+@async_db
+def whitelist_chat(chat_id: int) -> bool:
     """Remove a chat from blacklist."""
-    try:
-        result = await async_db(
-            "DELETE FROM blacklisted_chats WHERE chat_id = ?",
-            (chat_id,)
-        )
-        return result > 0
-    except:
-        return False
+    conn = get_db()
+    cursor = conn.execute(
+        "DELETE FROM blacklisted_chats WHERE chat_id = ?",
+        (chat_id,)
+    )
+    result = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return result
 
 
-async def blacklisted_chats() -> list:
+@async_db
+def blacklisted_chats() -> list:
     """Get list of blacklisted chat IDs."""
-    try:
-        results = await async_db(
-            "SELECT chat_id FROM blacklisted_chats",
-            fetchall=True
-        )
-        return [row[0] for row in results]
-    except:
-        return []
-
-
-# Antiservice functions
-async def is_antiservice_on(chat_id: int) -> bool:
-    """Check if antiservice is enabled for a chat."""
-    result = await async_db(
-        "SELECT enabled FROM antiservice WHERE chat_id = ?",
-        (chat_id,),
-        fetchone=True
-    )
-    return bool(result and result[0])
-
-
-async def antiservice_on(chat_id: int):
-    """Enable antiservice for a chat."""
-    await async_db(
-        "INSERT OR REPLACE INTO antiservice (chat_id, enabled) VALUES (?, ?)",
-        (chat_id, 1)
-    )
-
-
-async def antiservice_off(chat_id: int):
-    """Disable antiservice for a chat."""
-    await async_db(
-        "INSERT OR REPLACE INTO antiservice (chat_id, enabled) VALUES (?, ?)",
-        (chat_id, 0)
-    )
-
-
-async def get_antiservice_settings(chat_id: int) -> dict:
-    """Get antiservice settings for a chat."""
-    result = await async_db(
-        "SELECT settings FROM antiservice WHERE chat_id = ?",
-        (chat_id,),
-        fetchone=True
-    )
-    
-    if result and result[0]:
-        return json.loads(result[0])
-    return {}
-
-
-async def update_antiservice_settings(chat_id: int, settings: dict):
-    """Update antiservice settings for a chat."""
-    settings_json = json.dumps(settings)
-    
-    await async_db(
-        """INSERT OR REPLACE INTO antiservice (chat_id, enabled, settings) 
-           VALUES (?, ?, ?)""",
-        (chat_id, 1, settings_json)
-    )
-
-
-# Couple functions
-async def get_couple(chat_id: int, date: str) -> dict:
-    """Get couple for a specific date."""
-    result = await async_db(
-        "SELECT couple_data FROM couples WHERE chat_id = ? AND date = ?",
-        (chat_id, date),
-        fetchone=True
-    )
-    
-    if result and result[0]:
-        return json.loads(result[0])
-    return None
-
-
-async def save_couple(chat_id: int, date: str, couple_data: dict):
-    """Save couple for a specific date."""
-    couple_json = json.dumps(couple_data)
-    
-    await async_db(
-        "INSERT OR REPLACE INTO couples (chat_id, date, couple_data) VALUES (?, ?, ?)",
-        (chat_id, date, couple_json)
-    )
-
-
-# Filter functions
-async def save_filter(chat_id: int, name: str, filter_data: dict):
-    """Save a filter for a chat."""
-    filter_json = json.dumps(filter_data)
-    
-    await async_db(
-        "INSERT OR REPLACE INTO filters (chat_id, name, filter_data) VALUES (?, ?, ?)",
-        (chat_id, name.lower(), filter_json)
-    )
-
-
-async def get_filter(chat_id: int, name: str) -> dict:
-    """Get a filter by name."""
-    result = await async_db(
-        "SELECT filter_data FROM filters WHERE chat_id = ? AND name = ?",
-        (chat_id, name.lower()),
-        fetchone=True
-    )
-    
-    if result and result[0]:
-        return json.loads(result[0])
-    return {}
-
-
-async def delete_filter(chat_id: int, name: str) -> bool:
-    """Delete a filter by name."""
-    result = await async_db(
-        "DELETE FROM filters WHERE chat_id = ? AND name = ?",
-        (chat_id, name.lower())
-    )
-    return result > 0
-
-
-async def get_filters_names(chat_id: int) -> list:
-    """Get list of filter names for a chat."""
-    results = await async_db(
-        "SELECT name FROM filters WHERE chat_id = ?",
-        (chat_id,),
-        fetchall=True
-    )
+    conn = get_db()
+    cursor = conn.execute("SELECT chat_id FROM blacklisted_chats")
+    results = cursor.fetchall()
+    conn.close()
     return [row[0] for row in results]
 
 
-async def deleteall_filters(chat_id: int) -> bool:
+# Antiservice functions
+@async_db
+def is_antiservice_on(chat_id: int) -> bool:
+    """Check if antiservice is enabled for a chat."""
+    conn = get_db()
+    cursor = conn.execute(
+        "SELECT enabled FROM antiservice WHERE chat_id = ?",
+        (chat_id,)
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return bool(row and row[0])
+
+
+@async_db
+def antiservice_on(chat_id: int):
+    """Enable antiservice for a chat."""
+    conn = get_db()
+    conn.execute(
+        "INSERT OR REPLACE INTO antiservice (chat_id, enabled) VALUES (?, ?)",
+        (chat_id, 1)
+    )
+    conn.commit()
+    conn.close()
+
+
+@async_db
+def antiservice_off(chat_id: int):
+    """Disable antiservice for a chat."""
+    conn = get_db()
+    conn.execute(
+        "INSERT OR REPLACE INTO antiservice (chat_id, enabled) VALUES (?, ?)",
+        (chat_id, 0)
+    )
+    conn.commit()
+    conn.close()
+
+
+@async_db
+def get_antiservice_settings(chat_id: int) -> dict:
+    """Get antiservice settings for a chat."""
+    conn = get_db()
+    cursor = conn.execute(
+        "SELECT settings FROM antiservice WHERE chat_id = ?",
+        (chat_id,)
+    )
+    row = cursor.fetchone()
+    conn.close()
+    
+    if row and row[0]:
+        return json.loads(row[0])
+    return {}
+
+
+@async_db
+def update_antiservice_settings(chat_id: int, settings: dict):
+    """Update antiservice settings for a chat."""
+    settings_json = json.dumps(settings)
+    conn = get_db()
+    
+    conn.execute("""
+        INSERT OR REPLACE INTO antiservice (chat_id, enabled, settings) 
+           VALUES (?, ?, ?)""",
+        (chat_id, 1, settings_json)
+    )
+    conn.commit()
+    conn.close()
+
+
+# Couple functions
+@async_db
+def get_couple(chat_id: int, date: str) -> dict:
+    """Get couple for a specific date."""
+    conn = get_db()
+    cursor = conn.execute(
+        "SELECT couple_data FROM couples WHERE chat_id = ? AND date = ?",
+        (chat_id, date)
+    )
+    row = cursor.fetchone()
+    conn.close()
+    
+    if row and row[0]:
+        return json.loads(row[0])
+    return None
+
+
+@async_db
+def save_couple(chat_id: int, date: str, couple_data: dict):
+    """Save couple for a specific date."""
+    couple_json = json.dumps(couple_data)
+    conn = get_db()
+    
+    conn.execute(
+        "INSERT OR REPLACE INTO couples (chat_id, date, couple_data) VALUES (?, ?, ?)",
+        (chat_id, date, couple_json)
+    )
+    conn.commit()
+    conn.close()
+
+
+# Filter functions
+@async_db
+def save_filter(chat_id: int, name: str, filter_data: dict):
+    """Save a filter for a chat."""
+    filter_json = json.dumps(filter_data)
+    conn = get_db()
+    
+    conn.execute(
+        "INSERT OR REPLACE INTO filters (chat_id, name, filter_data) VALUES (?, ?, ?)",
+        (chat_id, name.lower(), filter_json)
+    )
+    conn.commit()
+    conn.close()
+
+
+@async_db
+def get_filter(chat_id: int, name: str) -> dict:
+    """Get a filter by name."""
+    conn = get_db()
+    cursor = conn.execute(
+        "SELECT filter_data FROM filters WHERE chat_id = ? AND name = ?",
+        (chat_id, name.lower())
+    )
+    row = cursor.fetchone()
+    conn.close()
+    
+    if row and row[0]:
+        return json.loads(row[0])
+    return {}
+
+
+@async_db
+def delete_filter(chat_id: int, name: str) -> bool:
+    """Delete a filter by name."""
+    conn = get_db()
+    cursor = conn.execute(
+        "DELETE FROM filters WHERE chat_id = ? AND name = ?",
+        (chat_id, name.lower())
+    )
+    result = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return result
+
+
+@async_db
+def get_filters_names(chat_id: int) -> list:
+    """Get list of filter names for a chat."""
+    conn = get_db()
+    cursor = conn.execute(
+        "SELECT name FROM filters WHERE chat_id = ?",
+        (chat_id,)
+    )
+    results = cursor.fetchall()
+    conn.close()
+    return [row[0] for row in results]
+
+
+@async_db
+def deleteall_filters(chat_id: int) -> bool:
     """Delete all filters for a chat."""
-    try:
-        await async_db("DELETE FROM filters WHERE chat_id = ?", (chat_id,))
-        return True
-    except:
-        return False
+    conn = get_db()
+    conn.execute("DELETE FROM filters WHERE chat_id = ?", (chat_id,))
+    conn.commit()
+    conn.close()
+    return True
 
 
 # Statistics functions
-async def get_gbans_count() -> int:
+@async_db
+def get_gbans_count() -> int:
     """Get total number of global bans."""
-    result = await async_db("SELECT COUNT(*) FROM gbans", fetchone=True)
-    return result[0] if result else 0
+    conn = get_db()
+    cursor = conn.execute("SELECT COUNT(*) FROM gbans")
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else 0
 
 
-async def get_notes_count() -> dict:
+@async_db
+def get_notes_count() -> dict:
     """Get notes count statistics."""
+    conn = get_db()
+    
     # Count total notes
-    result = await async_db("SELECT COUNT(*) FROM notes", fetchone=True)
-    notes_count = result[0] if result else 0
+    cursor = conn.execute("SELECT COUNT(*) FROM notes")
+    notes_count = cursor.fetchone()[0]
     
     # Count chats with notes
-    result = await async_db("SELECT COUNT(DISTINCT chat_id) FROM notes", fetchone=True)
-    chats_count = result[0] if result else 0
+    cursor = conn.execute("SELECT COUNT(DISTINCT chat_id) FROM notes")
+    chats_count = cursor.fetchone()[0]
+    
+    conn.close()
     
     return {"notes_count": notes_count, "chats_count": chats_count}
 
 
-async def get_filters_count() -> dict:
+@async_db
+def get_filters_count() -> dict:
     """Get filters count statistics."""
+    conn = get_db()
+    
     # Count total filters
-    result = await async_db("SELECT COUNT(*) FROM filters", fetchone=True)
-    filters_count = result[0] if result else 0
+    cursor = conn.execute("SELECT COUNT(*) FROM filters")
+    filters_count = cursor.fetchone()[0]
     
     # Count chats with filters
-    result = await async_db("SELECT COUNT(DISTINCT chat_id) FROM filters", fetchone=True)
-    chats_count = result[0] if result else 0
+    cursor = conn.execute("SELECT COUNT(DISTINCT chat_id) FROM filters")
+    chats_count = cursor.fetchone()[0]
+    
+    conn.close()
     
     return {"filters_count": filters_count, "chats_count": chats_count}
 
 
-async def get_blacklist_filters_count() -> dict:
+@async_db
+def get_blacklist_filters_count() -> dict:
     """Get blacklist filters count statistics."""
+    conn = get_db()
+    
     # Count total blacklist filters
-    result = await async_db("SELECT COUNT(*) FROM blacklist WHERE word IS NOT NULL", fetchone=True)
-    filters_count = result[0] if result else 0
+    cursor = conn.execute("SELECT COUNT(*) FROM blacklist WHERE word IS NOT NULL")
+    filters_count = cursor.fetchone()[0]
     
     # Count chats with blacklist filters
-    result = await async_db("SELECT COUNT(DISTINCT chat_id) FROM blacklist WHERE word IS NOT NULL", fetchone=True)
-    chats_count = result[0] if result else 0
+    cursor = conn.execute("SELECT COUNT(DISTINCT chat_id) FROM blacklist WHERE word IS NOT NULL")
+    chats_count = cursor.fetchone()[0]
+    
+    conn.close()
     
     return {"filters_count": filters_count, "chats_count": chats_count}
 
 
-async def get_warns_count() -> dict:
+@async_db
+def get_warns_count() -> dict:
     """Get warns count statistics."""
+    conn = get_db()
+    
     # Count total warns
-    result = await async_db("SELECT COUNT(*) FROM warns", fetchone=True)
-    warns_count = result[0] if result else 0
+    cursor = conn.execute("SELECT COUNT(*) FROM warnings")
+    warns_count = cursor.fetchone()[0]
     
     # Count chats with warns
-    result = await async_db("SELECT COUNT(DISTINCT chat_id) FROM warns", fetchone=True)
-    chats_count = result[0] if result else 0
+    cursor = conn.execute("SELECT COUNT(DISTINCT chat_id) FROM warnings")
+    chats_count = cursor.fetchone()[0]
+    
+    conn.close()
     
     return {"warns_count": warns_count, "chats_count": chats_count}
 
 
-async def get_karmas_count() -> dict:
+@async_db
+def get_karmas_count() -> dict:
     """Get karmas count statistics."""
+    conn = get_db()
+    
     # Count total karma entries
-    result = await async_db("SELECT COUNT(*) FROM karma", fetchone=True)
-    karmas_count = result[0] if result else 0
+    cursor = conn.execute("SELECT COUNT(*) FROM karma")
+    karmas_count = cursor.fetchone()[0]
     
     # Count chats with karma
-    result = await async_db("SELECT COUNT(DISTINCT chat_id) FROM karma", fetchone=True)
-    chats_count = result[0] if result else 0
+    cursor = conn.execute("SELECT COUNT(DISTINCT chat_id) FROM karma")
+    chats_count = cursor.fetchone()[0]
+    
+    conn.close()
     
     return {"karmas_count": karmas_count, "chats_count": chats_count}
 
@@ -1631,45 +1750,58 @@ async def get_rss_feeds_count() -> int:
     return 0
 
 
-async def remove_served_chat(chat_id: int):
+@async_db
+def remove_served_chat(chat_id: int):
     """Remove a chat from served chats (for cleanup)."""
     # This is for cleaning up chats where bot is no longer present
     # In SQLite version, we just remove from chat_members if needed
-    await async_db("DELETE FROM chat_members WHERE chat_id = ?", (chat_id,))
+    conn = get_db()
+    conn.execute("DELETE FROM chat_members WHERE chat_id = ?", (chat_id,))
+    conn.commit()
+    conn.close()
 
 
 # Karma functions
-async def user_global_karma(user_id: int) -> int:
+@async_db
+def user_global_karma(user_id: int) -> int:
     """Get global karma for a user across all chats."""
-    result = await async_db(
+    conn = get_db()
+    cursor = conn.execute(
         "SELECT SUM(karma) FROM karma WHERE user_id = ?",
-        (user_id,),
-        fetchone=True
+        (user_id,)
     )
-    return result[0] if result and result[0] else 0
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row and row[0] else 0
 
 
 # Karma functions
-async def get_karma(chat_id: int, name: str) -> dict:
+@async_db
+def get_karma(chat_id: int, name: str) -> dict:
     """Get karma data for a specific user in a chat."""
-    result = await async_db(
+    conn = get_db()
+    cursor = conn.execute(
         "SELECT karma_data FROM karma WHERE chat_id = ? AND name = ?",
-        (chat_id, name),
-        fetchone=True
+        (chat_id, name)
     )
+    row = cursor.fetchone()
+    conn.close()
     
-    if result and result[0]:
-        return json.loads(result[0])
+    if row and row[0]:
+        return json.loads(row[0])
     return None
 
 
-async def get_karmas(chat_id: int) -> dict:
+@async_db
+def get_karmas(chat_id: int) -> dict:
     """Get all karma data for a chat."""
-    results = await async_db(
+    conn = get_db()
+    cursor = conn.execute(
         "SELECT name, karma_data FROM karma WHERE chat_id = ?",
-        (chat_id,),
-        fetchall=True
+        (chat_id,)
     )
+    results = cursor.fetchall()
+    conn.close()
     
     karma_dict = {}
     for row in results:
@@ -1679,88 +1811,119 @@ async def get_karmas(chat_id: int) -> dict:
     return karma_dict
 
 
-async def update_karma(chat_id: int, name: str, karma_data: dict):
+@async_db
+def update_karma(chat_id: int, name: str, karma_data: dict):
     """Update karma data for a user in a chat."""
     karma_json = json.dumps(karma_data)
+    conn = get_db()
     
-    await async_db(
+    conn.execute(
         "INSERT OR REPLACE INTO karma (chat_id, name, karma_data) VALUES (?, ?, ?)",
         (chat_id, name, karma_json)
     )
+    conn.commit()
+    conn.close()
 
 
-async def is_karma_on(chat_id: int) -> bool:
+@async_db
+def is_karma_on(chat_id: int) -> bool:
     """Check if karma system is enabled for a chat."""
-    result = await async_db(
+    conn = get_db()
+    cursor = conn.execute(
         "SELECT enabled FROM karma_settings WHERE chat_id = ?",
-        (chat_id,),
-        fetchone=True
+        (chat_id,)
     )
-    return bool(result and result[0])
+    row = cursor.fetchone()
+    conn.close()
+    return bool(row and row[0])
 
 
-async def karma_on(chat_id: int):
+@async_db
+def karma_on(chat_id: int):
     """Enable karma system for a chat."""
-    await async_db(
+    conn = get_db()
+    conn.execute(
         "INSERT OR REPLACE INTO karma_settings (chat_id, enabled) VALUES (?, ?)",
         (chat_id, 1)
     )
+    conn.commit()
+    conn.close()
 
 
-async def karma_off(chat_id: int):
+@async_db
+def karma_off(chat_id: int):
     """Disable karma system for a chat."""
-    await async_db(
-        "INSERT OR REPLACE INTO karma_settings (chat_id, enabled) VALUES (?, ?, ?)",
+    conn = get_db()
+    conn.execute(
+        "INSERT OR REPLACE INTO karma_settings (chat_id, enabled) VALUES (?, ?)",
         (chat_id, 0)
     )
+    conn.commit()
+    conn.close()
 
 
 # Media deduplication functions
-async def is_dedupe_enabled(chat_id: int) -> bool:
+@async_db
+def is_dedupe_enabled(chat_id: int) -> bool:
     """Check if deduplication is enabled for a chat."""
-    result = await async_db(
+    conn = get_db()
+    cursor = conn.execute(
         "SELECT enabled FROM media_dedupe_settings WHERE chat_id = ?",
-        (chat_id,),
-        fetchone=True
+        (chat_id,)
     )
-    return bool(result and result[0])
+    row = cursor.fetchone()
+    conn.close()
+    return bool(row and row[0])
 
 
-async def set_dedupe_enabled(chat_id: int, enabled: bool):
+@async_db
+def set_dedupe_enabled(chat_id: int, enabled: bool):
     """Enable/disable deduplication for a chat."""
     value = 1 if enabled else 0
-    await async_db(
+    conn = get_db()
+    conn.execute(
         "INSERT OR REPLACE INTO media_dedupe_settings (chat_id, enabled) VALUES (?, ?)",
         (chat_id, value)
     )
+    conn.commit()
+    conn.close()
 
 
-async def check_duplicate_media(chat_id: int, file_hash: str) -> Optional[dict]:
+@async_db
+def check_duplicate_media(chat_id: int, file_hash: str) -> Optional[dict]:
     """Check if media hash already exists."""
-    result = await async_db(
+    conn = get_db()
+    cursor = conn.execute(
         "SELECT user_id, message_id FROM media_hashes WHERE chat_id = ? AND file_hash = ?",
-        (chat_id, file_hash),
-        fetchone=True
+        (chat_id, file_hash)
     )
+    row = cursor.fetchone()
+    conn.close()
     
-    if result:
-        return {"user_id": result[0], "message_id": result[1]}
+    if row:
+        return {"user_id": row[0], "message_id": row[1]}
     return None
 
 
-async def save_media_hash(chat_id: int, file_hash: str, user_id: int, message_id: int):
+@async_db
+def save_media_hash(chat_id: int, file_hash: str, user_id: int, message_id: int):
     """Save media hash to prevent duplicates."""
-    await async_db(
+    conn = get_db()
+    conn.execute(
         "INSERT OR IGNORE INTO media_hashes (chat_id, file_hash, user_id, message_id, timestamp) VALUES (?, ?, ?, ?, ?)",
         (chat_id, file_hash, user_id, message_id, int(time.time()))
     )
+    conn.commit()
+    conn.close()
 
 
-async def increment_user_media(chat_id: int, user_id: int, media_type: str):
+@async_db
+def increment_user_media(chat_id: int, user_id: int, media_type: str):
     """Increment user's media count."""
     column = "photos" if media_type == "photo" else "videos"
+    conn = get_db()
     
-    await async_db(
+    conn.execute(
         f"""INSERT OR REPLACE INTO media_stats (chat_id, user_id, photos, videos, total, last_media) 
             VALUES (
                 ?,
@@ -1772,33 +1935,41 @@ async def increment_user_media(chat_id: int, user_id: int, media_type: str):
             )""",
         (chat_id, user_id, chat_id, user_id, column, chat_id, user_id, column, chat_id, user_id, int(time.time()))
     )
+    conn.commit()
+    conn.close()
 
 
-async def get_user_media_stats(chat_id: int, user_id: int) -> dict:
+@async_db
+def get_user_media_stats(chat_id: int, user_id: int) -> dict:
     """Get user's media statistics."""
-    result = await async_db(
+    conn = get_db()
+    cursor = conn.execute(
         "SELECT photos, videos, total, last_media FROM media_stats WHERE chat_id = ? AND user_id = ?",
-        (chat_id, user_id),
-        fetchone=True
+        (chat_id, user_id)
     )
+    row = cursor.fetchone()
+    conn.close()
     
-    if result:
+    if row:
         return {
-            "photos": result[0] or 0,
-            "videos": result[1] or 0,
-            "total": result[2] or 0,
-            "last_media": result[3]
+            "photos": row[0] or 0,
+            "videos": row[1] or 0,
+            "total": row[2] or 0,
+            "last_media": row[3]
         }
     return {"photos": 0, "videos": 0, "total": 0, "last_media": None}
 
 
-async def get_media_leaderboard(chat_id: int, limit: int = 10) -> list:
+@async_db
+def get_media_leaderboard(chat_id: int, limit: int = 10) -> list:
     """Get media leaderboard for a chat."""
-    results = await async_db(
+    conn = get_db()
+    cursor = conn.execute(
         "SELECT user_id, photos, videos, total FROM media_stats WHERE chat_id = ? ORDER BY total DESC LIMIT ?",
-        (chat_id, limit),
-        fetchall=True
+        (chat_id, limit)
     )
+    results = cursor.fetchall()
+    conn.close()
     
     return [
         {
@@ -1811,47 +1982,57 @@ async def get_media_leaderboard(chat_id: int, limit: int = 10) -> list:
     ]
 
 
-async def get_inactive_media_users(chat_id: int, inactive_seconds: int) -> list:
+@async_db
+def get_inactive_media_users(chat_id: int, inactive_seconds: int) -> list:
     """Get users who haven't posted media in specified time."""
     cutoff_time = int(time.time()) - inactive_seconds
-    
-    results = await async_db(
+    conn = get_db()
+    cursor = conn.execute(
         "SELECT user_id FROM media_stats WHERE chat_id = ? AND (last_media IS NULL OR last_media < ?)",
-        (chat_id, cutoff_time),
-        fetchall=True
+        (chat_id, cutoff_time)
     )
+    results = cursor.fetchall()
+    conn.close()
     
     return [row[0] for row in results]
 
 
-async def get_low_media_users(chat_id: int, threshold: int) -> list:
+@async_db
+def get_low_media_users(chat_id: int, threshold: int) -> list:
     """Get users with media count below threshold."""
-    results = await async_db(
+    conn = get_db()
+    cursor = conn.execute(
         "SELECT user_id FROM media_stats WHERE chat_id = ? AND total < ?",
-        (chat_id, threshold),
-        fetchall=True
+        (chat_id, threshold)
     )
+    results = cursor.fetchall()
+    conn.close()
     
     return [row[0] for row in results]
 
 
-async def get_chat_media_stats(chat_id: int) -> dict:
+@async_db
+def get_chat_media_stats(chat_id: int) -> dict:
     """Get overall media statistics for a chat."""
+    conn = get_db()
+    
     # Total photos
-    result = await async_db("SELECT SUM(photos) FROM media_stats WHERE chat_id = ?", (chat_id,), fetchone=True)
-    total_photos = result[0] or 0 if result else 0
+    cursor = conn.execute("SELECT SUM(photos) FROM media_stats WHERE chat_id = ?", (chat_id,))
+    total_photos = cursor.fetchone()[0] or 0
     
     # Total videos
-    result = await async_db("SELECT SUM(videos) FROM media_stats WHERE chat_id = ?", (chat_id,), fetchone=True)
-    total_videos = result[0] or 0 if result else 0
+    cursor = conn.execute("SELECT SUM(videos) FROM media_stats WHERE chat_id = ?", (chat_id,))
+    total_videos = cursor.fetchone()[0] or 0
     
     # Total media
-    result = await async_db("SELECT SUM(total) FROM media_stats WHERE chat_id = ?", (chat_id,), fetchone=True)
-    total_media = result[0] or 0 if result else 0
+    cursor = conn.execute("SELECT SUM(total) FROM media_stats WHERE chat_id = ?", (chat_id,))
+    total_media = cursor.fetchone()[0] or 0
     
     # Active users
-    result = await async_db("SELECT COUNT(*) FROM media_stats WHERE chat_id = ? AND total > 0", (chat_id,), fetchone=True)
-    active_users = result[0] or 0 if result else 0
+    cursor = conn.execute("SELECT COUNT(*) FROM media_stats WHERE chat_id = ? AND total > 0", (chat_id,))
+    active_users = cursor.fetchone()[0] or 0
+    
+    conn.close()
     
     return {
         "total_photos": total_photos,
@@ -1862,52 +2043,71 @@ async def get_chat_media_stats(chat_id: int) -> dict:
 
 
 # Region blocking functions
-async def add_blocked_country(chat_id: int, countries: list):
+@async_db
+def add_blocked_country(chat_id: int, countries: list):
     """Add blocked countries for a chat."""
+    conn = get_db()
     for country in countries:
-        await async_db(
+        conn.execute(
             "INSERT OR IGNORE INTO region_blocks (chat_id, type, value) VALUES (?, ?, ?)",
             (chat_id, "country", country.lower())
         )
+    conn.commit()
+    conn.close()
 
 
-async def add_blocked_lang(chat_id: int, languages: list):
+@async_db
+def add_blocked_lang(chat_id: int, languages: list):
     """Add blocked languages for a chat."""
+    conn = get_db()
     for lang in languages:
-        await async_db(
+        conn.execute(
             "INSERT OR IGNORE INTO region_blocks (chat_id, type, value) VALUES (?, ?, ?)",
             (chat_id, "language", lang.lower())
         )
+    conn.commit()
+    conn.close()
 
 
-async def remove_blocked_country(chat_id: int, countries: list):
+@async_db
+def remove_blocked_country(chat_id: int, countries: list):
     """Remove blocked countries for a chat."""
+    conn = get_db()
     for country in countries:
-        await async_db(
+        conn.execute(
             "DELETE FROM region_blocks WHERE chat_id = ? AND type = ? AND value = ?",
             (chat_id, "country", country.lower())
         )
+    conn.commit()
+    conn.close()
 
 
-async def remove_blocked_lang(chat_id: int, languages: list):
+@async_db
+def remove_blocked_lang(chat_id: int, languages: list):
     """Remove blocked languages for a chat."""
+    conn = get_db()
     for lang in languages:
-        await async_db(
+        conn.execute(
             "DELETE FROM region_blocks WHERE chat_id = ? AND type = ? AND value = ?",
             (chat_id, "language", lang.lower())
         )
+    conn.commit()
+    conn.close()
 
 
-async def get_chat_blocks(chat_id: int) -> dict:
+@async_db
+def get_chat_blocks(chat_id: int) -> dict:
     """Get blocked countries and languages for a chat."""
     countries = []
     languages = []
+    conn = get_db()
     
-    results = await async_db(
+    cursor = conn.execute(
         "SELECT type, value FROM region_blocks WHERE chat_id = ?",
-        (chat_id,),
-        fetchall=True
+        (chat_id,)
     )
+    results = cursor.fetchall()
+    conn.close()
     
     for row in results:
         if row[0] == "country":
@@ -1918,60 +2118,71 @@ async def get_chat_blocks(chat_id: int) -> dict:
     return {"countries": countries, "languages": languages}
 
 
-async def clear_chat_blocks(chat_id: int):
+@async_db
+def clear_chat_blocks(chat_id: int):
     """Clear all blocks for a chat."""
-    await async_db("DELETE FROM region_blocks WHERE chat_id = ?", (chat_id,))
+    conn = get_db()
+    conn.execute("DELETE FROM region_blocks WHERE chat_id = ?", (chat_id,))
+    conn.commit()
+    conn.close()
 
 
 # Music cache functions
-async def get_cached_song(query: str, exact_only: bool = True) -> Optional[dict]:
+@async_db
+def get_cached_song(query: str, exact_only: bool = True) -> Optional[dict]:
     """Get cached song by query with access tracking."""
     query_norm = query.lower().strip()
+    conn = get_db()
     
-    result = await async_db(
+    cursor = conn.execute(
         "SELECT * FROM music_cache WHERE query = ?",
-        (query_norm,),
-        fetchone=True
+        (query_norm,)
     )
+    row = cursor.fetchone()
     
-    if result:
+    if row:
         # Update access tracking
-        await async_db(
+        conn.execute(
             "UPDATE music_cache SET last_accessed = ?, access_count = access_count + 1 WHERE id = ?",
-            (int(time.time()), result[0])
+            (int(time.time()), row[0])
         )
+        conn.commit()
+        conn.close()
         
         return {
-            "query": result[1],
-            "title": result[2],
-            "performer": result[3],
-            "duration": result[4],
-            "file_id": result[5],
-            "thumb_file_id": result[6],
-            "storage_msg_id": result[7],
-            "created_at": result[8],
-            "last_accessed": result[9],
-            "access_count": result[10]
+            "query": row[1],
+            "title": row[2],
+            "performer": row[3],
+            "duration": row[4],
+            "file_id": row[5],
+            "thumb_file_id": row[6],
+            "storage_msg_id": row[7],
+            "created_at": row[8],
+            "last_accessed": row[9],
+            "access_count": row[10]
         }
     
     if exact_only:
+        conn.close()
         return None
     
     # Fuzzy match via SQLite LIKE
-    results = await async_db(
+    cursor = conn.execute(
         "SELECT * FROM music_cache WHERE query LIKE ? ORDER BY access_count DESC LIMIT 5",
-        (f"%{query_norm}%",),
-        fetchall=True
+        (f"%{query_norm}%",)
     )
+    results = cursor.fetchall()
     
     # Simple fuzzy matching - return first reasonable match
     for row in results:
         if row[1] and query_norm in row[1].lower():
             # Update access tracking
-            await async_db(
+            conn.execute(
                 "UPDATE music_cache SET last_accessed = ?, access_count = access_count + 1 WHERE id = ?",
                 (int(time.time()), row[0])
             )
+            conn.commit()
+            conn.close()
             
             return {
                 "query": row[1],
@@ -1986,44 +2197,60 @@ async def get_cached_song(query: str, exact_only: bool = True) -> Optional[dict]
                 "access_count": row[10]
             }
     
+    conn.close()
     return None
 
 
-async def save_cached_song(query: str, title: str, performer: str, duration: int, 
+@async_db
+def save_cached_song(query: str, title: str, performer: str, duration: int, 
                           file_id: str, thumb_file_id: Optional[str], storage_msg_id: int):
     """Save song to cache."""
     query_norm = query.lower().strip()
     now = int(time.time())
+    conn = get_db()
     
-    await async_db(
+    conn.execute(
         """INSERT OR REPLACE INTO music_cache 
            (query, title, performer, duration, file_id, thumb_file_id, storage_msg_id, created_at, last_accessed, access_count) 
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (query_norm, title, performer, duration, file_id, thumb_file_id, storage_msg_id, now, now, 1)
     )
+    conn.commit()
+    conn.close()
 
 
-async def delete_cached_song(query: str) -> bool:
+@async_db
+def delete_cached_song(query: str) -> bool:
     """Delete cached song by exact query match."""
     query_norm = query.lower().strip()
-    
-    result = await async_db("DELETE FROM music_cache WHERE query = ?", (query_norm,))
-    return result > 0
+    conn = get_db()
+    cursor = conn.execute("DELETE FROM music_cache WHERE query = ?", (query_norm,))
+    result = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return result
 
 
-async def get_music_cache_count() -> int:
+@async_db
+def get_music_cache_count() -> int:
     """Get total number of cached songs."""
-    result = await async_db("SELECT COUNT(*) FROM music_cache", fetchone=True)
-    return result[0] if result else 0
+    conn = get_db()
+    cursor = conn.execute("SELECT COUNT(*) FROM music_cache")
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else 0
 
 
-async def get_recent_cached_songs(limit: int = 15) -> list:
+@async_db
+def get_recent_cached_songs(limit: int = 15) -> list:
     """Get recent cached songs sorted by last access."""
-    results = await async_db(
+    conn = get_db()
+    cursor = conn.execute(
         "SELECT * FROM music_cache ORDER BY last_accessed DESC LIMIT ?",
-        (limit,),
-        fetchall=True
+        (limit,)
     )
+    results = cursor.fetchall()
+    conn.close()
     
     return [
         {
@@ -2042,61 +2269,83 @@ async def get_recent_cached_songs(limit: int = 15) -> list:
     ]
 
 
-async def purge_music_cache(query_pattern: str) -> int:
+@async_db
+def purge_music_cache(query_pattern: str) -> int:
     """Delete cached songs matching pattern."""
-    result = await async_db(
+    conn = get_db()
+    cursor = conn.execute(
         "DELETE FROM music_cache WHERE query LIKE ?",
         (f"%{query_pattern}%",)
     )
+    result = cursor.rowcount
+    conn.commit()
+    conn.close()
     return result
 
 
 # Rules functions
-async def get_rules(chat_id: int) -> str:
+@async_db
+def get_rules(chat_id: int) -> str:
     """Get rules for a chat."""
-    result = await async_db(
+    conn = get_db()
+    cursor = conn.execute(
         "SELECT rules FROM chat_rules WHERE chat_id = ?",
-        (chat_id,),
-        fetchone=True
+        (chat_id,)
     )
-    return result[0] if result and result[0] else None
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None
 
 
-async def set_chat_rules(chat_id: int, rules: str):
+@async_db
+def set_chat_rules(chat_id: int, rules: str):
     """Set rules for a chat."""
-    await async_db(
+    conn = get_db()
+    conn.execute(
         "INSERT OR REPLACE INTO chat_rules (chat_id, rules) VALUES (?, ?)",
         (chat_id, rules)
     )
+    conn.commit()
+    conn.close()
 
 
-async def delete_rules(chat_id: int) -> bool:
+@async_db
+def delete_rules(chat_id: int) -> bool:
     """Delete rules for a chat."""
-    result = await async_db("DELETE FROM chat_rules WHERE chat_id = ?", (chat_id,))
-    return result > 0
+    conn = get_db()
+    cursor = conn.execute("DELETE FROM chat_rules WHERE chat_id = ?", (chat_id,))
+    result = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return result
 
 
 # Trigger functions
-async def add_trigger_db(chat_id: int, trigger: str, response: str, is_global: bool = False, 
+@async_db
+def add_trigger_db(chat_id: int, trigger: str, response: str, is_global: bool = False, 
                         is_media: bool = False, file_id: str = None, file_type: str = None, 
                         use_regex: bool = False):
     """Add a trigger to the database."""
+    conn = get_db()
+    
     # Check if trigger already exists
-    result = await async_db(
+    cursor = conn.execute(
         "SELECT id FROM triggers WHERE chat_id = ? AND trigger = ?",
         (0 if is_global else chat_id, trigger.lower())
     )
+    existing_row = cursor.fetchone()
     
-    if result:
+    if existing_row:
         # Update existing trigger - add response to existing responses
-        trigger_id = result[0]
-        result = await async_db(
+        trigger_id = existing_row[0]
+        cursor = conn.execute(
             "SELECT responses FROM triggers WHERE id = ?",
             (trigger_id,)
         )
+        response_row = cursor.fetchone()
         
-        if result and result[0]:
-            existing_responses = json.loads(result[0])
+        if response_row and response_row[0]:
+            existing_responses = json.loads(response_row[0])
         else:
             existing_responses = []
         
@@ -2109,7 +2358,7 @@ async def add_trigger_db(chat_id: int, trigger: str, response: str, is_global: b
         }
         existing_responses.append(new_response)
         
-        await async_db(
+        conn.execute(
             "UPDATE triggers SET responses = ?, updated_at = ? WHERE id = ?",
             (json.dumps(existing_responses), int(time.time()), trigger_id)
         )
@@ -2122,34 +2371,45 @@ async def add_trigger_db(chat_id: int, trigger: str, response: str, is_global: b
             "file_type": file_type
         }]
         
-        await async_db(
+        conn.execute(
             """INSERT INTO triggers (chat_id, trigger, responses, use_regex, created_at, updated_at) 
                VALUES (?, ?, ?, ?, ?, ?)""",
             (0 if is_global else chat_id, trigger.lower(), json.dumps(responses), 
              use_regex, int(time.time()), int(time.time()))
         )
+    
+    conn.commit()
+    conn.close()
 
 
-async def remove_trigger_db(chat_id: int, trigger: str, is_global: bool = False) -> bool:
+@async_db
+def remove_trigger_db(chat_id: int, trigger: str, is_global: bool = False) -> bool:
     """Remove a trigger from the database."""
-    result = await async_db(
+    conn = get_db()
+    cursor = conn.execute(
         "DELETE FROM triggers WHERE chat_id = ? AND trigger = ?",
         (0 if is_global else chat_id, trigger.lower())
     )
-    return result > 0
+    result = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return result
 
 
-async def get_chat_triggers_db(chat_id: int, include_global: bool = True) -> list:
+@async_db
+def get_chat_triggers_db(chat_id: int, include_global: bool = True) -> list:
     """Get all triggers for a chat."""
+    conn = get_db()
     triggers = []
     
     # Get chat-specific triggers
-    results = await async_db(
+    cursor = conn.execute(
         "SELECT chat_id, trigger, responses, use_regex FROM triggers WHERE chat_id = ?",
         (chat_id,)
     )
+    chat_results = cursor.fetchall()
     
-    for row in results:
+    for row in chat_results:
         triggers.append({
             "chat_id": row[0],
             "trigger": row[1],
@@ -2159,12 +2419,13 @@ async def get_chat_triggers_db(chat_id: int, include_global: bool = True) -> lis
     
     # Get global triggers if requested
     if include_global:
-        results = await async_db(
+        cursor = conn.execute(
             "SELECT chat_id, trigger, responses, use_regex FROM triggers WHERE chat_id = 0",
             ()
         )
+        global_results = cursor.fetchall()
         
-        for row in results:
+        for row in global_results:
             triggers.append({
                 "chat_id": row[0],
                 "trigger": row[1],
@@ -2172,14 +2433,19 @@ async def get_chat_triggers_db(chat_id: int, include_global: bool = True) -> lis
                 "use_regex": bool(row[3])
             })
     
+    conn.close()
     return triggers
 
 
-async def record_trigger_usage_db(chat_id: int, trigger: str):
+@async_db
+def record_trigger_usage_db(chat_id: int, trigger: str):
     """Record trigger usage statistics."""
-    await async_db(
+    conn = get_db()
+    conn.execute(
         """INSERT OR REPLACE INTO trigger_usage (chat_id, trigger, last_used, use_count) 
            VALUES (?, ?, ?, 
                    COALESCE((SELECT use_count FROM trigger_usage WHERE chat_id = ? AND trigger = ?), 0) + 1)""",
         (chat_id, trigger.lower(), int(time.time()), chat_id, trigger.lower())
     )
+    conn.commit()
+    conn.close()
